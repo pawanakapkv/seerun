@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://cdn.jsdelivr.net/npm/JSCPP@2.0.6/dist/JSCPP.es5.min.js"></script>
+</head>
+<body>
+<div id="output"></div>
+<script>
+setTimeout(() => {
+    try {
+        var code = "int foo() { int z=1; return z; }\nint main() { int x = 5; foo(); return 0; }";
+        var engine = new JSCPP.Default(JSCPP.defaults);
+        var debugger_inst = engine.run(code, "", {debug: true});
+        var out = [];
+        var done = false;
+        while (!done) {
+            var node = debugger_inst.nextNode();
+            while (!node || (!node.sLine && !node.line)) {
+                done = debugger_inst.next();
+                if (done) break;
+                node = debugger_inst.nextNode();
+            }
+            if (done) break;
+
+            var currentLine = node.sLine || node.line;
+            var scopeArray = debugger_inst.rt.scope || [];
+            
+            var dbgStr = "Line " + currentLine + " Scopes: " + scopeArray.map(function(s, i) {
+                var keys = [];
+                for (var k in s) { if(k!=='variables' && !k.startsWith('$')) keys.push(k); }
+                var vs = Object.keys(s.variables || s).filter(k => !k.startsWith('$')).join(',');
+                return "[" + i + "] n:" + s.name + " fn:" + s.functionName + " keys:" + keys.join(',') + " vars:{" + vs + "}";
+            }).join(' | ');
+            out.push(dbgStr);
+            
+            done = debugger_inst.next();
+        }
+        document.getElementById('output').innerText = out.join("\n");
+    } catch (e) {
+        document.getElementById('output').innerText = e.toString();
+    }
+}, 500);
+</script>
+</body>
+</html>

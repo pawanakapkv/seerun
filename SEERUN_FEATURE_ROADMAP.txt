@@ -1,0 +1,441 @@
+================================================================================
+                    SEERUN — COMPLETE FEATURE ROADMAP
+              Algorithm Dry-Run Visualizer | All Features in One Place
+================================================================================
+
+CURRENT STATE (Already Implemented)
+--------------------------------------
+  [x] Python code execution via WebView (Pyodide)
+  [x] C++ code execution via WebView (JSCPP 2.0.6)
+  [x] Step-by-step variable tracking (local + global scope)
+  [x] Auto-scroll to executing line (top-aligned)
+  [x] Custom stdin input support (multi-line)
+  [x] Collapsed / Expanded variable panel
+  [x] Console output panel
+  [x] Changed-variable highlight (blue glow)
+  [x] Function call stack tracking (frames)
+  [x] STL polyfills: vector, stack, queue
+  [x] Array-based Linked List support
+  [x] Clone Linked List default example
+  [x] Find Middle of Linked List default example (Python)
+
+================================================================================
+SECTION 1 — CRITICAL (Must Have, Highest Impact)
+================================================================================
+
+FEATURE 1: Algorithm Template Library
+--------------------------------------
+  Problem  : Users open a blank editor. They don't know what to write.
+  Solution : A modal/drawer with 30+ pre-built algorithm templates
+             grouped by category. User taps one → code loads instantly.
+  
+  Categories to include:
+    Linked List   → Reverse, Detect Cycle, Clone, Find Middle, Merge Two
+    Arrays        → Binary Search, Two Pointers, Sliding Window, Kadane
+    Trees         → Inorder, Preorder, BFS Level Order, Height, LCA
+    Graphs        → BFS, DFS, Dijkstra, Topological Sort, Flood Fill
+    Sorting       → Bubble Sort, Merge Sort, Quick Sort, Heap Sort
+    Dynamic Prog  → Fibonacci, 0/1 Knapsack, LCS, Coin Change
+    Stacks/Queues → Valid Parentheses, Monotonic Stack, Circular Queue
+    Math          → GCD, Sieve of Eratosthenes, Fast Exponentiation
+
+  Files to change:
+    - app/index.tsx         → Add Template Picker modal button + modal UI
+    - data/templates.ts     → [NEW] All template code strings organized by category
+  
+  Effort: Medium | Impact: VERY HIGH
+
+
+FEATURE 2: Auto-Play + Playback Speed Control
+----------------------------------------------
+  Problem  : Users must tap "Next" 50+ times for long algorithms.
+             There is no way to watch execution flow automatically.
+  Solution : An Auto-Play button (▶ / ‖) that steps through execution
+             at a configurable speed. A speed selector: 0.5x 1x 2x 5x.
+
+  Files to change:
+    - app/visualizer.tsx    → Add `isPlaying` state, `playbackSpeed` state
+                              Add setInterval-based auto-stepper
+                              Add speed selector buttons in control bar
+
+  Effort: Small | Impact: VERY HIGH
+
+
+FEATURE 3: Step Counter + Progress Bar
+----------------------------------------
+  Problem  : Users have no sense of where they are in the execution.
+             Is step 7 near the start or near the end? Unknown.
+  Solution : Display "Step 7 of 43" in the header.
+             A thin colored progress bar below the CODE header.
+
+  Files to change:
+    - app/visualizer.tsx    → Expose total trace length, compute progress %
+                              Render progress bar and step counter in header
+
+  Effort: Small | Impact: HIGH
+
+
+FEATURE 4: Variable Change Log (Diff per Step)
+------------------------------------------------
+  Problem  : The variables panel shows current state but NOT what changed.
+             Users have to mentally diff every step themselves.
+  Solution : A small log section under variables panel showing:
+               "Step 5: slow  0 → 1"
+               "Step 5: fast  0 → 2"
+             Only changed variables shown, with old → new value.
+
+  Files to change:
+    - app/visualizer.tsx    → Deep compare prev/curr state each step
+                              Render change log entries with styled arrows
+
+  Effort: Small | Impact: HIGH
+
+
+FEATURE 5: Friendly Error Explanation Engine
+---------------------------------------------
+  Problem  : JSCPP throws cryptic errors like "Parsing Failure: line 4"
+             or "variable cout does not exist". Users are completely lost.
+  Solution : A pattern-matching engine that maps known error strings
+             to plain English explanations + actionable fix suggestions.
+
+  Error mapping examples:
+    "variable cout does not exist"
+      → "Add 'using namespace std;' at the top of your code."
+    "Parsing Failure" + "ListNode"
+      → "JSCPP cannot parse struct constructors. Use a createNode() helper function instead."
+    "Parsing Failure" + ";;"
+      → "Double semicolon detected. Your struct definition has an extra semicolon."
+    "Infinite execution loop"
+      → "Your loop has no exit condition. Check your while loop termination."
+    "Compilation Error: ERROR"
+      → Show the raw error line + suggest checking the line number mentioned.
+
+  Files to change:
+    - app/visualizer.tsx    → Add `friendlyError(msg: string): string` helper
+                              Replace raw error display with friendly version
+
+  Effort: Small | Impact: HIGH
+
+================================================================================
+SECTION 2 — HIGH PRIORITY (Should Have)
+================================================================================
+
+FEATURE 6: Breakpoints
+------------------------
+  Problem  : For 100-line algorithms, users want to skip to line 60
+             without clicking "Next" 60 times.
+  Solution : Tap any line number → red dot appears (breakpoint set).
+             Press Play → execution runs automatically and PAUSES
+             when it hits a breakpointed line.
+             Tap again → breakpoint removed.
+
+  Files to change:
+    - app/visualizer.tsx    → `breakpointLines: Set<number>` state
+                              Check breakpoints during auto-play loop
+                              Render red dots on line number column
+
+  Effort: Medium | Impact: HIGH
+
+
+FEATURE 7: Save & History
+--------------------------
+  Problem  : Users write great code, close the app, it's gone forever.
+  Solution : Auto-save last 10 dry runs using AsyncStorage.
+             A "History" screen shows: algorithm name, language,
+             timestamp, code preview. Tap to reload any saved run.
+             Users can also manually name and star a dry run.
+
+  Files to change:
+    - app/history.tsx       → [NEW] History screen with list of saved runs
+    - utils/storage.ts      → [NEW] AsyncStorage read/write helpers
+    - app/index.tsx         → Add "Save" button + auto-save on run
+    - app/_layout.tsx       → Add History tab to navigation
+
+  Effort: Medium | Impact: HIGH
+
+
+FEATURE 8: Expected Output Diff
+---------------------------------
+  Problem  : Users can't tell if their algorithm produces the right answer.
+  Solution : An "Expected Output" text box on the editor screen.
+             After execution, compare expected vs actual console output.
+             Show a ✅ PASS or ❌ FAIL badge with a side-by-side diff.
+
+  Files to change:
+    - app/index.tsx         → Add `expectedOutput` TextInput field
+    - app/visualizer.tsx    → Compare final outputBuffer to expectedOutput
+                              Render PASS/FAIL badge with diff view
+
+  Effort: Small | Impact: HIGH
+
+
+FEATURE 9: Variable Pin / Watch Window
+----------------------------------------
+  Problem  : When there are 20 variables, the ones you care about
+             (e.g., slow, fast, head) get buried by internal variables.
+  Solution : Long-press any variable name → it gets "pinned" to a
+             sticky "WATCH" section at the very top of the variables panel.
+             Pinned variables always stay visible regardless of scroll.
+
+  Files to change:
+    - app/visualizer.tsx    → `pinnedVars: string[]` state
+                              Render separate "WATCH" section for pinned vars
+                              Long-press handler on variable rows
+
+  Effort: Small | Impact: HIGH
+
+
+FEATURE 10: Syntax Highlighting in Editor
+------------------------------------------
+  Problem  : The code editor is a plain white TextInput with no colors.
+             No keyword highlighting, no line numbers in editor, no
+             bracket matching. This feels unprofessional.
+  Solution : Replace the raw TextInput with a Monaco Editor or
+             CodeMirror WebView embed. Full syntax highlighting,
+             line numbers, bracket matching, and auto-indent.
+
+  Libraries to evaluate:
+    - react-native-code-editor (lightweight, good for mobile)
+    - Monaco Editor via WebView (full VS Code editor in the app)
+    - CodeMirror 6 via WebView (lightweight alternative)
+
+  Files to change:
+    - app/index.tsx         → Replace TextInput with editor WebView component
+    - components/CodeEditor.tsx → [NEW] WebView-based syntax-highlighted editor
+
+  Effort: Large | Impact: HIGH
+
+================================================================================
+SECTION 3 — MEDIUM PRIORITY (Nice to Have)
+================================================================================
+
+FEATURE 11: Algorithm Complexity Badge
+----------------------------------------
+  Problem  : Users don't know the time/space complexity of their algorithm.
+  Solution : User manually tags their algorithm before running:
+               Time Complexity: O(n)
+               Space Complexity: O(1)
+             These are shown as colored badges in the visualizer header.
+             In the future, auto-detect common patterns (nested loops = O(n²)).
+
+  Files to change:
+    - app/index.tsx         → Add complexity tag fields
+    - app/visualizer.tsx    → Render complexity badges in header
+
+  Effort: Small | Impact: MEDIUM
+
+
+FEATURE 12: Share a Dry Run
+-----------------------------
+  Problem  : Students want to share their visualization with classmates or teachers.
+  Solution : A "Share" button that exports the full trace as:
+               Option A → A JSON file with all steps + code
+               Option B → A screenshot of the current step
+               Option C → (Future) A generated shareable web link
+
+  Files to change:
+    - utils/share.ts        → [NEW] Export trace JSON, screenshot capture
+    - app/visualizer.tsx    → Share button in toolbar
+
+  Effort: Medium | Impact: MEDIUM
+
+
+FEATURE 13: Dark / Light Theme Toggle
+---------------------------------------
+  Problem  : The app is dark-only ("Deep Space Slate"). Some users,
+             especially in bright environments, prefer a light theme.
+  Solution : A theme toggle (sun/moon icon) in settings.
+             React Context propagates theme to all components.
+             Light theme uses white/grey backgrounds with dark text.
+
+  Files to change:
+    - contexts/ThemeContext.tsx → [NEW] Theme provider
+    - All screen files          → Replace hardcoded colors with theme tokens
+    - app/settings.tsx          → [NEW] Settings screen with theme toggle
+
+  Effort: Large | Impact: MEDIUM
+
+
+FEATURE 14: Font Size Control
+-------------------------------
+  Problem  : Code panel text may be too small on small screens (budget phones)
+             or too large on tablets.
+  Solution : `A` and `A+` buttons in the visualizer toolbar.
+             Font size saved to AsyncStorage so it persists across sessions.
+             Range: 10px → 20px in 2px increments.
+
+  Files to change:
+    - app/visualizer.tsx    → `fontSize` state + persist with AsyncStorage
+                              Apply fontSize to code lines and variable text
+
+  Effort: Small | Impact: MEDIUM
+
+
+FEATURE 15: Multi-Language Tabs
+---------------------------------
+  Problem  : Users can only see one language at a time. To compare
+             Python vs C++ implementations, they have to switch back and forth.
+  Solution : Side-by-side tab pills (Python | C++) that keep BOTH
+             code files in memory simultaneously.
+             Run button selects which tab is active.
+
+  Files to change:
+    - app/index.tsx         → Keep both Python and C++ code in state simultaneously
+                              Tab pills to switch view without losing other code
+
+  Effort: Small | Impact: MEDIUM
+
+================================================================================
+SECTION 4 — FUTURE / ADVANCED
+================================================================================
+
+FEATURE 16: Visual Data Structure Panel
+-----------------------------------------
+  Problem  : Seeing "val[0]=10, nxt[0]=1, val[1]=20" is not intuitive.
+             Users need a graphical representation of the data structure.
+  Solution : A dedicated visual panel that auto-renders based on
+             the variable names and types present:
+               int[] / val[] + nxt[]  →  Linked List with arrows
+               parent[]               →  Disjoint Set (Union Find) tree
+               stack[]                →  Vertical tower of boxes
+               queue[]                →  Horizontal conveyor lane
+               adj[][]                →  Graph nodes and edges
+             The visualization animates in sync with execution steps.
+
+  Files to change:
+    - components/DataStructureVisualizer.tsx → [NEW] Canvas/SVG renderer
+    - app/visualizer.tsx                     → Pass current vars to renderer
+                                               Show/hide panel toggle
+
+  Effort: Very Large | Impact: VERY HIGH
+
+
+FEATURE 17: Binary Tree Visualizer
+------------------------------------
+  Problem  : BST, AVL, Segment Tree are among the most common interview topics.
+             Without visual rendering, they're impossible to understand from vars alone.
+  Solution : When user declares `int tree[4*N]` or an array-based binary tree,
+             render proper tree with:
+               - Circular node boxes with values
+               - Lines connecting parent to left/right child
+               - Current node highlighted in execution color
+               - BFS/DFS traversal animated hop by hop
+
+  Files to change:
+    - components/TreeVisualizer.tsx  → [NEW] SVG-based tree renderer
+    - app/visualizer.tsx             → Detect tree pattern, mount visualizer
+
+  Effort: Very Large | Impact: VERY HIGH
+
+
+FEATURE 18: Graph BFS / DFS Visualizer
+----------------------------------------
+  Problem  : Graph algorithms are the #1 topic in technical interviews
+             but the hardest to visualize without a proper graph diagram.
+  Solution : When user uses a 2D adjacency matrix `int adj[N][N]`,
+             render a force-directed graph with:
+               - Circular nodes with IDs
+               - Lines (edges) between connected nodes
+               - Visited nodes highlighted in a trail color
+               - Queue/Stack state shown beside the graph
+
+  Files to change:
+    - components/GraphVisualizer.tsx → [NEW] Graph layout + animation engine
+    - app/visualizer.tsx             → Detect adj matrix pattern, mount renderer
+
+  Effort: Very Large | Impact: VERY HIGH
+
+
+FEATURE 19: Sorting Animation Panel
+-------------------------------------
+  Problem  : Sorting algorithms are the first thing every CS student learns.
+             Visual bar charts are the most iconic CS education visualization.
+  Solution : When user runs a sorting algorithm, detect the primary array
+             and render animated bars:
+               - Each element = a bar, height proportional to value
+               - Compared elements highlighted in yellow
+               - Swapped elements flash red → green
+               - Final sorted state glows green
+
+  Files to change:
+    - components/SortingVisualizer.tsx → [NEW] Bar chart animation component
+    - app/visualizer.tsx               → Detect sorting pattern, mount renderer
+
+  Effort: Large | Impact: HIGH
+
+
+FEATURE 20: Java Language Support
+-----------------------------------
+  Problem  : Millions of CS students use Java (Android dev, university courses).
+             The app currently only supports Python and C++.
+  Solution : Integrate a Java interpreter that runs inside a WebView:
+               Option A → Cheerpj (WASM-based JVM, heavy but full-featured)
+               Option B → Doppio (browser-based JVM, lighter)
+               Option C → A custom Java → JS transpiler for educational subset
+
+  Files to change:
+    - app/visualizer.tsx    → Add Java execution path (new WebView HTML)
+    - app/index.tsx         → Add Java language option + default example
+
+  Effort: Very Large | Impact: HIGH
+
+
+BONUS FEATURE 21: AI "Explain This Step" Button
+--------------------------------------------------
+  Problem  : A variable changes from 3 to 7. Users don't know WHY.
+  Solution : A small brain icon (🧠) next to each changed variable.
+             Tap it → sends current code + execution context to an LLM API.
+             Returns a plain English explanation:
+               "fast moved to index 2 because the while loop condition
+                'fast != -1 && nxt[fast] != -1' was still true, so
+                fast advanced two nodes in the linked list."
+
+  Files to change:
+    - utils/ai.ts           → [NEW] LLM API call (OpenAI / Gemini API)
+    - app/visualizer.tsx    → 🧠 button on variable change rows
+    - app/settings.tsx      → API key input for user's own key
+
+  Effort: Medium | Impact: VERY HIGH (differentiator feature)
+
+================================================================================
+RECOMMENDED IMPLEMENTATION ORDER
+================================================================================
+
+  Priority | Feature                          | Effort      | Impact
+  ---------|----------------------------------|-------------|----------
+  1        | Auto-Play + Speed Control        | Small       | VERY HIGH
+  2        | Step Counter + Progress Bar      | Small       | HIGH
+  3        | Variable Change Log              | Small       | HIGH
+  4        | Friendly Error Explanations      | Small       | HIGH
+  5        | Algorithm Template Library       | Medium      | VERY HIGH
+  6        | Expected Output Diff             | Small       | HIGH
+  7        | Variable Pin / Watch             | Small       | HIGH
+  8        | Breakpoints                      | Medium      | HIGH
+  9        | Save & History                   | Medium      | HIGH
+  10       | Font Size Control                | Small       | MEDIUM
+  11       | Algorithm Complexity Badge       | Small       | MEDIUM
+  12       | Multi-Language Tabs              | Small       | MEDIUM
+  13       | Share a Dry Run                  | Medium      | MEDIUM
+  14       | Syntax Highlighting in Editor    | Large       | HIGH
+  15       | Dark / Light Theme               | Large       | MEDIUM
+  16       | Visual Data Structure Panel      | Very Large  | VERY HIGH
+  17       | Binary Tree Visualizer           | Very Large  | VERY HIGH
+  18       | Graph BFS / DFS Visualizer       | Very Large  | VERY HIGH
+  19       | Sorting Animation Panel          | Large       | HIGH
+  20       | Java Language Support            | Very Large  | HIGH
+  21       | AI Explain This Step             | Medium      | VERY HIGH
+
+================================================================================
+NOTES
+================================================================================
+  - Features 1-4 can be implemented in a single session with low breakage risk.
+  - Features 16-18 (Visual panels) are the app's biggest differentiator vs web tools.
+  - Feature 21 (AI Explain) is the ONE feature no competitor has — prioritize it.
+  - All C++ code examples must avoid struct constructors (JSCPP limitation).
+  - Python execution is handled by Pyodide (full CPython in WASM).
+  - C++ execution is handled by JSCPP 2.0.6 (limited C++ subset).
+
+================================================================================
+                         END OF SEERUN FEATURE ROADMAP
+                       Generated: 2026-05-01 | Version 1.0
+================================================================================

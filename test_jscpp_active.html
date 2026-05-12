@@ -1,0 +1,510 @@
+
+  <html>
+    <head>
+      <meta charset="utf-8">
+      <script
+        src="https://cdn.jsdelivr.net/npm/JSCPP@2.0.6/dist/JSCPP.es5.min.js"
+        onerror="window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', data: 'CDN Error: Failed to download C++ engine (Check Network).' }))"
+      ></script>
+      <script>
+        function postSafe(obj) {
+            if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
+                window.ReactNativeWebView.postMessage(JSON.stringify(obj));
+            } else {
+                setTimeout(function() { postSafe(obj); }, 100);
+            }
+        }
+
+        function logDebug(msg) {
+            postSafe({ type: 'debug', data: msg });
+        }
+
+        var initRetries = 0;
+        function init() {
+            try {
+                var engine = window.JSCPP || window.jscpp;
+                if (!engine) {
+                    initRetries++;
+                    if (initRetries > 200) {
+                        postSafe({ type: 'error', data: 'Timeout: C++ engine failed to load.' });
+                        return;
+                    }
+                    setTimeout(init, 100);
+                    return;
+                }
+                window.engineInstance = engine;
+                postSafe({ type: 'ready' });
+            } catch (e) {
+                postSafe({ type: 'error', data: 'Init Error: ' + e.toString() });
+            }
+        }
+        init();
+
+        // =================================================================
+        // C++ -> JSCPP Transpiler
+        // JSCPP does NOT support: class, templates, STL containers.
+        // This transpiler converts vector<T> to C-style arrays so the
+        // most common educational algorithms work out of the box.
+        // =================================================================
+        function preprocessCpp(src) {
+            var knownVectors = [];
+
+            function markVec(name) {
+                if (name && knownVectors.indexOf(name) < 0) knownVectors.push(name);
+                return name;
+            }
+
+            // 1. Strip unsupported / unneeded headers
+            src = src.replace(/#include\\s*<vector>/g,    '');
+            src = src.replace(/#include\\s*<bits\\/stdc\\+\\+\\.h>/g, '');
+            src = src.replace(/#include\\s*<algorithm>/g, '');
+            src = src.replace(/#include\\s*<numeric>/g,   '');
+            src = src.replace(/#include\\s*<utility>/g,   '');
+            src = src.replace(/#include\\s*<map>/g,       '');
+            src = src.replace(/#include\\s*<set>/g,       '');
+            src = src.replace(/#include\\s*<stack>/g,     '');
+            src = src.replace(/#include\\s*<queue>/g,     '');
+            src = src.replace(/using\\s+namespace\\s+std\\s*;/g, '');
+            // strip remaining std:: qualifiers
+            src = src.replace(/std::/g, '');
+
+            // 2. Normalise vector element types to what JSCPP understands
+            src = src.replace(/\\bvector\\s*<\\s*double\\s*>/g,        'vector<float>');
+            src = src.replace(/\\bvector\\s*<\\s*long\\s+long\\s*>/g,  'vector<int>');
+            src = src.replace(/\\bvector\\s*<\\s*long\\s*>/g,          'vector<int>');
+            src = src.replace(/\\bvector\\s*<\\s*unsigned\\s+int\\s*>/g,'vector<int>');
+            src = src.replace(/\\bvector\\s*<\\s*size_t\\s*>/g,        'vector<int>');
+
+            // 3. Iterator-range construction (most common: .begin()/.end() slicing)
+            //    vector<int> left(arr.begin(), arr.begin() + mid);
+            //    -> int left[1000]; int left_sz=0; for(int __i=0;__i<mid;__i++) left[left_sz++]=arr[__i];
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s+(\\w+)\\s*\\(\\s*(\\w+)\\.begin\\s*\\(\\)\\s*(?:\\+\\s*(\\w+))?\\s*,\\s*(?:\\3\\.begin\\s*\\(\\)\\s*\\+\\s*(\\w+)|\\3\\.end\\s*\\(\\))\\s*\\)\\s*;/g,
+                function(m, type, name, arr, fromOff, toOff) {
+                    markVec(name);
+                    var from = fromOff ? fromOff : '0';
+                    var to   = toOff   ? toOff   : (arr + '_sz');
+                    return type + ' ' + name + '[1000]; int ' + name + '_sz = 0;' +
+                           ' for(int __i = ' + from + '; __i < ' + to + '; __i++) ' +
+                           name + '[' + name + '_sz++] = ' + arr + '[__i];';
+                }
+            );
+
+            // 4. Local variable declarations: vector<T> v;  or  vector<T> v(n);
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s+(\\w+)\\s*(?:\\(\\s*(\\d+)\\s*\\))?\\s*;/g,
+                function(m, type, name, initN) {
+                    markVec(name);
+                    return type + ' ' + name + '[1000]; int ' + name + '_sz = ' + (initN || '0') + ';';
+                }
+            );
+
+            // 4.5 Initializer lists: vector<T> data = {1, 2, 3}; or vector<T> data{1, 2, 3};
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s+(\\w+)\\s*(?:=\\s*)?\\{([^}]*)\\}\\s*;/g,
+                function(m, type, name, elements) {
+                    markVec(name);
+                    var els = elements.trim();
+                    var arr = els ? els.split(',') : [];
+                    var count = 0;
+                    var assignments = "";
+                    for (var i = 0; i < arr.length; i++) {
+                        var el = arr[i].trim();
+                        if (el) {
+                            assignments += name + "[" + count + "] = " + el + "; ";
+                            count++;
+                        }
+                    }
+                    return type + ' ' + name + '[1000]; int ' + name + '_sz = ' + count + '; ' + assignments;
+                }
+            );
+
+            // 4.6 Expression initialization: vector<T> v = func();
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s+(\\w+)\\s*=\\s*([^;]+);/g,
+                function(m, type, name, expr) {
+                    markVec(name);
+                    return type + ' ' + name + '[1000]; int ' + name + '_sz = 0; ' + expr + ';';
+                }
+            );
+
+            // 5. Function params: vector<T>& v  (pass by reference)
+            //    JSCPP does NOT support int& references, so we just use int.
+            //    The array itself is already passed by pointer, so element writes work.
+            //    Only the size won't propagate back to caller (JSCPP limitation).
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s*&\\s*(\\w+)/g,
+                function(m, type, name) {
+                    markVec(name);
+                    return type + ' ' + name + '[], int ' + name + '_sz';
+                }
+            );
+
+            // 6. Function params / return types: vector<T> funcOrVarName
+            //    For function params (value copy), emit int arr[], int arr_sz (no initializer).
+            //    For return types like "vector<int> merge_sort(", change to void.
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s+(\\w+)\\s*(?=\\()/g,
+                function(m, type, fname) {
+                    // This is a function return type — change to void
+                    return 'void ' + fname;
+                }
+            );
+            src = src.replace(
+                /\\bvector\\s*<\\s*(int|float|char)\\s*>\\s+(\\w+)/g,
+                function(m, type, name) {
+                    markVec(name);
+                    // Could be a value param like "vector<int> arr" in a param list
+                    return type + ' ' + name + '[], int ' + name + '_sz';
+                }
+            );
+
+            // 7. Method calls -> array operations
+            // NOTE: Do NOT call markVec() here — only vectors *declared* as vector<T>
+            // should be tracked. Method calls on plain C arrays must not be injected
+            // with _sz companions at call sites (step 8).
+            src = src.replace(/\\b(\\w+)\\.push_back\\s*\\(([^;)]+)\\)/g, function(m, v, arg) {
+                return v + '[' + v + '_sz++] = ' + arg;
+            });
+            src = src.replace(/\\b(\\w+)\\.pop_back\\s*\\(\\s*\\)/g, function(m, v) {
+                return v + '_sz--';
+            });
+            src = src.replace(/\\b(\\w+)\\.size\\s*\\(\\s*\\)/g, function(m, v) {
+                return v + '_sz';
+            });
+            src = src.replace(/\\b(\\w+)\\.empty\\s*\\(\\s*\\)/g, function(m, v) {
+                return '(' + v + '_sz == 0)';
+            });
+            src = src.replace(/\\b(\\w+)\\.clear\\s*\\(\\s*\\)/g, function(m, v) {
+                return v + '_sz = 0';
+            });
+            src = src.replace(/\\b(\\w+)\\.back\\s*\\(\\s*\\)/g, function(m, v) {
+                return v + '[' + v + '_sz - 1]';
+            });
+            src = src.replace(/\\b(\\w+)\\.front\\s*\\(\\s*\\)/g, function(m, v) {
+                return v + '[0]';
+            });
+            src = src.replace(/\\b(\\w+)\\.at\\s*\\(([^)]+)\\)/g, function(m, v, i) {
+                return v + '[' + i + ']';
+            });
+            src = src.replace(/\\b(\\w+)\\.resize\\s*\\(([^)]+)\\)/g, function(m, v, n) {
+                return v + '_sz = ' + n;
+            });
+
+            // 8. Update call sites: inject _sz companion ONLY when the known vector
+            //    variable is an actual function argument — i.e. preceded by '(' or ','
+            //    (with optional whitespace). This prevents matching inside initializer
+            //    lists like '= {38, 2, 5}' which would corrupt plain C array declarations.
+            for (var vi = 0; vi < knownVectors.length; vi++) {
+                var vname = knownVectors[vi];
+                // Negative lookbehind: NOT preceded by '=' or '{' (excludes initializer contexts)
+                // Negative lookahead: NOT already followed by _sz or '['
+                // Positive lookahead: followed by ',' or ')'
+                var re = new RegExp('(?<![={])\\\\b' + vname + '\\\\b(?!_sz)(?!\\\\[)(?=\\\\s*[,)])', 'g');
+                src = src.replace(re, vname + ', ' + vname + '_sz');
+            }
+
+            // 8.5 Strip assignment of vectors to bypass "assign to array" errors
+            for (var vi = 0; vi < knownVectors.length; vi++) {
+                var vname = knownVectors[vi];
+                var reAssign = new RegExp('\\\\b' + vname + '\\\\s*=\\\\s*([^;]+);', 'g');
+                src = src.replace(reAssign, function(m, expr) { return expr + ';'; });
+            }
+
+            // 9. Fix orphaned return statements produced by unsupported return types
+            for (var ri = 0; ri < knownVectors.length; ri++) {
+                var rv = knownVectors[ri];
+                src = src.replace(new RegExp('\\breturn\\s+' + rv + '\\s*;', 'g'), 'return;');
+            }
+            // Strip C++11 initializer list returns (e.g. return {1, 2};) to avoid syntax parser crashes
+            src = src.replace(/\breturn\s*\{[^}]*\}\s*;/g, 'return;');
+
+            // 10. Inject functional stack frame boundaries for local scope extraction
+            src = src.replace(/^([ \t]*)([\w<>,:&*]+(?:[ \t]+[\w<>,:&*]+)*)[ \t]+([a-zA-Z_]\w*)[ \t]*\([^)]*\)[ \t]*(?:const[ \t]*)?\{/gm, function(m, indent, retType, funcName) {
+                var keywords = ['if', 'while', 'for', 'switch', 'catch', 'typeof', 'sizeof', 'new', 'delete', 'return'];
+                if (keywords.indexOf(funcName) !== -1 || keywords.indexOf(retType.trim()) !== -1) return m;
+                return m + '\n' + indent + '    const char* ___func_marker___ = "' + funcName + '";';
+            });
+
+            return src;
+        }
+
+        function runCppCode(code, user_input) {
+          try {
+            var engine = window.engineInstance;
+            if (!engine) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', data: 'C++ Engine not initialized yet.' }));
+              return;
+            }
+
+            logDebug('Preprocessing C++ code...');
+            var processedCode = preprocessCpp(code);
+            logDebug('Compiling...');
+
+            var outputBuffer = '';
+            var config = {
+              debug: true,
+              stdio: {
+                write: function(str) { outputBuffer += str; }
+              }
+            };
+
+            var debugger_inst;
+            try {
+              debugger_inst = engine.run(processedCode, user_input, config);
+            } catch (e) {
+               window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', data: 'Compilation Error: ' + e.toString() }));
+               return;
+            }
+
+            logDebug('Compilation OK, starting execution...');
+
+            var trace_events_list = [];
+            var MAX_STEPS = 1000;
+            var step_count = 0;
+            var last_line = -1;
+            var last_vars_json = "";
+
+            function extractVars(scope, isGlobal) {
+                var res = {};
+                if (!scope) return res;
+                var vars = scope.variables || scope;
+                var ignores = {'cin':1, 'cout':1, 'endl':1, 'cerr':1, 'main':1, 'std':1, 'ios':1, 'ios_base':1, 'NULL':1};
+                for (var name in vars) {
+                    if (name.startsWith('$')) continue;
+                    if (isGlobal && ignores[name]) continue;
+                    var v = vars[name];
+                    var typeObj = v ? (v.t || v.type) : null;
+                    if (typeObj) {
+                        var tName = typeObj.type || typeObj.classic;
+                        if (tName === 'function') continue;
+                        var valObj = ('v' in v) ? v.v : ('value' in v ? v.value : v);
+                        try { 
+                            res[name] = jsonifyCppVar({ type: typeObj, v: valObj }, 0); 
+                            // Fallback to hide function pointers in global scope
+                            if (isGlobal && res[name] && res[name].data === '[ptr object]') {
+                                delete res[name];
+                            }
+                        }
+                        catch(e) { res[name] = { _type: 'raw', data: '[Err]' }; }
+                    }
+                }
+                return res;
+            }
+
+            function jsonifyCppVar(v, depth) {
+                if (depth > 5) return { _type: 'raw', data: '...' };
+                var type = v.type;
+                var val  = v.v;
+                if (!type) return { _type: 'raw', data: String(val) };
+                
+                var tName = type.type || type.classic;
+                if (tName === 'primitive') {
+                    return { _type: 'primitive', data: val };
+                } else if (tName === 'array' || (tName === 'pointer' && type.ptrType === 'array')) {
+                    var items = [];
+                    var arrTarget = Array.isArray(val) ? val : (val && val.target ? val.target : null);
+                    var len = Array.isArray(arrTarget) ? Math.min(arrTarget.length, 20) : 0;
+                    for (var i = 0; i < len; i++) {
+                        var eleVal = arrTarget[i];
+                        var eType = eleVal ? (eleVal.t || eleVal.type || type.eleType) : type.eleType;
+                        var eVal  = eleVal ? (('v' in eleVal) ? eleVal.v : ('value' in eleVal ? eleVal.value : eleVal)) : null;
+                        if (!eType) eType = { type: 'primitive', name: 'unknown' };
+                        items.push(jsonifyCppVar({ type: eType, v: eVal }, depth + 1));
+                    }
+                    if (arrTarget && arrTarget.length > 20) items.push({ _type: 'raw', data: '...' });
+                    return { _type: 'list', data: items };
+                } else if (tName === 'struct' || tName === 'class') {
+                    var d = {};
+                    var count = 0;
+                    var fields = val && val.v ? val.v : val;
+                    for (var field in fields) {
+                        if (count++ > 20) break;
+                        var fVal = fields[field];
+                        var fType = fVal ? (fVal.t || fVal.type) : null;
+                        var fv = fVal ? (('v' in fVal) ? fVal.v : fVal) : null;
+                        if (fType) {
+                            d[field] = jsonifyCppVar({ type: fType, v: fv }, depth + 1);
+                        } else {
+                            d[field] = { _type: 'raw', data: String(fv) };
+                        }
+                    }
+                    return { _type: 'object', class_name: type.name || 'struct', data: d };
+                } else if (tName === 'pointer') {
+                    return { _type: 'raw', data: '*' + (type.ptrType ? (type.ptrType.name || 'void') : 'void') };
+                }
+                return { _type: 'raw', data: String(val && val.target ? "[ptr object]" : val) };
+            }
+
+            var done = false;
+            var absolute_step_count = 0;
+            while (!done) {
+                absolute_step_count++;
+                if (absolute_step_count > 20000) {
+                     throw new Error('Infinite execution loop detected: Exceeded 20000 AST operations.');
+                }
+
+                var node = debugger_inst.nextNode();
+                while (!node || (!node.sLine && !node.line)) {
+                    done = debugger_inst.next();
+                    if (done) break;
+                    node = debugger_inst.nextNode();
+                }
+                if (done) break;
+
+                var currentLine = node.sLine || node.line;
+                
+                var scopeArray = debugger_inst.rt ? debugger_inst.rt.scope : [];
+                
+                var funcBorders = [];
+                if (scopeArray && scopeArray.length > 1) {
+                    for (var si = 1; si < scopeArray.length; si++) {
+                        var sVars = scopeArray[si].variables || scopeArray[si];
+                        if (sVars && sVars['___func_marker___'] !== undefined) {
+                            var vObj = sVars['___func_marker___'];
+                            var fnVal = (typeof vObj === 'object' && vObj.v !== undefined) ? vObj.v : vObj;
+                            if (typeof fnVal !== 'string' && fnVal && typeof fnVal.v === 'string') fnVal = fnVal.v;
+                            funcBorders.push({ index: si, name: String(fnVal) });
+                        }
+                    }
+                }
+
+                var frames = [];
+                var frameStarts = [];
+                if (funcBorders.length === 0) {
+                    frameStarts.push({ startIndex: 1, name: 'main' });
+                } else {
+                    for (var b = 0; b < funcBorders.length; b++) {
+                        var border = funcBorders[b];
+                        var startIdx = border.index;
+                        if (border.index - 1 > 0) {
+                            if (b === 0) {
+                                startIdx = border.index - 1;
+                            } else if (border.index - 1 > funcBorders[b-1].index) {
+                                startIdx = border.index - 1;
+                            }
+                        }
+                        frameStarts.push({ startIndex: startIdx, name: border.name });
+                    }
+                }
+
+                for (var f = 0; f < frameStarts.length; f++) {
+                    var fStart = frameStarts[f].startIndex;
+                    var fEnd = (f + 1 < frameStarts.length) ? frameStarts[f+1].startIndex : scopeArray.length;
+                    
+                    var fLocs = {};
+                    for (var i = fStart; i < fEnd; i++) {
+                        var cScopeVars = extractVars(scopeArray[i], false);
+                        for (var k in cScopeVars) {
+                            fLocs[k] = cScopeVars[k];
+                        }
+                    }
+                    frames.push({ func: frameStarts[f].name, rawVars: fLocs });
+                }
+
+                // Attach size information to transpiled array variables for all frames individually
+                for (var f = 0; f < frames.length; f++) {
+                    var flocs = frames[f].rawVars;
+                    for (var arrKey in flocs) {
+                        var szKey = arrKey + '_sz';
+                        if (flocs[szKey] !== undefined && flocs[arrKey] && flocs[arrKey]._type === 'list') {
+                            var szVal = flocs[szKey].data;
+                            if (typeof szVal === 'number' && szVal >= 0) {
+                                flocs[arrKey].data = flocs[arrKey].data.slice(0, szVal);
+                            }
+                        }
+                    }
+                    var filteredFLocs = {};
+                    for (var key in flocs) {
+                        if (!key.endsWith('_sz') && key !== '___func_marker___') filteredFLocs[key] = flocs[key];
+                    }
+                    frames[f].vars = filteredFLocs;
+                    delete frames[f].rawVars;
+                }
+
+                var globs = {};
+                // In JSCPP 2.0, scopeArray[0] is the global scope
+                if (scopeArray && scopeArray.length > 0) {
+                    globs = extractVars(scopeArray[0], true);
+                }
+                var filteredGlobs = {};
+                for (var gk in globs) {
+                    if (!gk.endsWith('_sz')) filteredGlobs[gk] = globs[gk];
+                }
+                for (var gak in filteredGlobs) {
+                    var gszKey = gak + '_sz';
+                    if (globs[gszKey] !== undefined && filteredGlobs[gak] && filteredGlobs[gak]._type === 'list') {
+                        var gszVal = globs[gszKey].data;
+                        if (typeof gszVal === 'number' && gszVal >= 0) {
+                            filteredGlobs[gak].data = filteredGlobs[gak].data.slice(0, gszVal);
+                        }
+                    }
+                }
+
+                for (var f = 0; f < frames.length; f++) {
+                    for (var dk in filteredGlobs) {
+                        if (frames[f].vars.hasOwnProperty(dk)) delete frames[f].vars[dk];
+                    }
+                }
+                
+                var currentFuncName = frames.length > 0 ? frames[frames.length - 1].func : 'main';
+                var filteredLocs = frames.length > 0 ? frames[frames.length - 1].vars : {};
+                var framesJsonStr = JSON.stringify(frames);
+
+                var current_vars_json = framesJsonStr + "|" + JSON.stringify(filteredGlobs);
+
+                if (currentLine !== last_line || current_vars_json !== last_vars_json) {
+                    step_count++;
+                    last_line = currentLine;
+                    last_vars_json = current_vars_json;
+
+                    trace_events_list.push({
+                        line: currentLine,
+                        func: currentFuncName,
+                        vars: filteredLocs,
+                        frames: frames,
+                        globs: Object.keys(filteredGlobs).length > 0 ? filteredGlobs : null,
+                        output: outputBuffer
+                    });
+                }
+
+                done = debugger_inst.next();
+                if (step_count >= MAX_STEPS) {
+                    trace_events_list.push({ error: 'Execution limit hit (1000 steps).' });
+                    break;
+                }
+            }
+
+            logDebug('Execution finished. Steps: ' + step_count);
+            trace_events_list.push({ line: -1, output: outputBuffer, vars: {} });
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'trace', data: trace_events_list }));
+
+          } catch (e) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'error', data: 'Runtime Error: ' + e.toString() }));
+          }
+        }
+      </script>
+    
+<script>
+  window.ReactNativeWebView = {
+    postMessage: function(msg) {
+        let p = document.createElement('p');
+        p.innerText = "POSTMESSAGE: " + msg.substring(0, 100);
+        document.body.appendChild(p);
+        console.log("POSTMESSAGE:", msg);
+    }
+  };
+</script>
+</head>
+
+    <body style="background: #1e1e1e;">
+<script>
+  setTimeout(() => {
+    // Kick off execution using same logic RN uses
+    const code = "class Solution { public: vector<int> findErrorNums(vector<int>& nums) { int n = nums.size(); int xZORy = 0; for (int i = 1; i <= n; i++) { xZORy ^= i; xZORy ^= nums[i - 1]; } int set_bit = xZORy & ~(xZORy - 1); int grp_01 = 0; int grp_02 = 0; int i = 1; for (int num : nums) { if (num & set_bit) { grp_01 ^= num; } else { grp_02 ^= num; } if (i & set_bit) { grp_01 ^= i; } else { grp_02 ^= i; } i++; } for(int num:nums){ if(num==grp_01){ return {grp_01,grp_02}; } } return {grp_02,grp_01}; } }; int main() { Solution s; vector<int> nums = {1, 2, 2, 4}; vector<int> res = s.findErrorNums(nums); return 0; }";
+    runCppCode(code, "");
+  }, 1000);
+</script>
+</body>
+
+  </html>
