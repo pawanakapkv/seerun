@@ -28,7 +28,7 @@ COPY server.js .
 COPY tracer.py .
 
 # Expose port
-EXPOSE 8080
+EXPOSE 8085
 
 # Run the server
 CMD ["node", "server.js"]

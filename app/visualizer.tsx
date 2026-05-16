@@ -1,21 +1,20 @@
+import { BlurView } from "expo-blur";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState, useMemo } from "react";
+import { Camera, FileJson, Share, X } from "lucide-react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
+    Modal,
     ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View,
-    Modal,
-    Alert,
+    View
 } from "react-native";
 import { WebView } from "react-native-webview";
-import { shareTraceAsJSON, shareStepAsImage } from "../utils/share";
-import { Share, FileJson, Camera, X, ArrowLeft } from "lucide-react-native";
-import { BlurView } from "expo-blur";
+import DataStructureVisualizer from "../components/DataStructureVisualizer";
 import { useTheme } from "../context/ThemeContext";
-import DataStructureVisualizer from '../components/DataStructureVisualizer';
+import { shareStepAsImage, shareTraceAsJSON } from "../utils/share";
 
 interface TraceEvent {
   line?: number;
@@ -769,7 +768,13 @@ const VariableViewer = ({ variable }: { variable: any }) => {
     const isObj = variable._type === "object";
     const title = isObj ? `Object<${variable.class_name}>` : "dict";
     const dataMap = variable.data || {};
-    const color = isObj ? (isDark ? "#DCDCAA" : "#7C3AED") : (isDark ? "#CE9178" : "#9B59B6");
+    const color = isObj
+      ? isDark
+        ? "#DCDCAA"
+        : "#7C3AED"
+      : isDark
+        ? "#CE9178"
+        : "#9B59B6";
     return (
       <View style={styles.dictMainContainer}>
         <Text
@@ -805,7 +810,8 @@ const VariableViewer = ({ variable }: { variable: any }) => {
 
 export default function VisualizerScreen() {
   const router = useRouter();
-  const { theme, isDark, fontSize, increaseFontSize, decreaseFontSize } = useTheme();
+  const { theme, isDark, fontSize, increaseFontSize, decreaseFontSize } =
+    useTheme();
   const styles = createStyles(theme, isDark, fontSize);
   const params = useLocalSearchParams();
   const [code, setCode] = useState("");
@@ -822,13 +828,18 @@ export default function VisualizerScreen() {
   const [isStateFullScreen, setIsStateFullScreen] = useState(false);
   const [showVisualPanel, setShowVisualPanel] = useState(true);
   const [isConsoleExpanded, setIsConsoleExpanded] = useState(false);
-  const [expandedLine, setExpandedLine] = useState<'executed' | 'executing' | null>(null);
+  const [expandedLine, setExpandedLine] = useState<
+    "executed" | "executing" | null
+  >(null);
   const [breakpoints, setBreakpoints] = useState<Set<number>>(new Set());
   const [expectedOutput, setExpectedOutput] = useState("");
   const [timeComplexity, setTimeComplexity] = useState("");
   const [spaceComplexity, setSpaceComplexity] = useState("");
   const [showShareMenu, setShowShareMenu] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [activeTab, setActiveTab] = useState<"code" | "vars" | "console">(
+    "code",
+  );
 
   const visualizerContentRef = useRef<View>(null);
   const [pinnedVars, setPinnedVars] = useState<Set<string>>(new Set());
@@ -838,32 +849,42 @@ export default function VisualizerScreen() {
   const stateScrollRef = useRef<ScrollView>(null);
   const [scrollViewHeight, setScrollViewHeight] = useState(0);
   const [stateViewHeight, setStateViewHeight] = useState(0);
-  const lineOffsets = useRef<{[key: number]: {y: number, height: number}}>({});
-  const varOffsets = useRef<{[key: string]: {y: number, height: number}}>({});
-  const scopeOffsets = useRef<{[key: string]: number}>({});
+  const lineOffsets = useRef<{ [key: number]: { y: number; height: number } }>(
+    {},
+  );
+  const varOffsets = useRef<{ [key: string]: { y: number; height: number } }>(
+    {},
+  );
+  const scopeOffsets = useRef<{ [key: string]: number }>({});
 
   // Friendly error message mapper
   const friendlyError = (msg: string): string => {
     const m = String(msg);
-    if (m.includes('cout does not exist') || m.includes('cin does not exist'))
+    if (m.includes("cout does not exist") || m.includes("cin does not exist"))
       return '\u26A0\uFE0F Fix: Add "using namespace std;" at the top of your code.';
-    if (m.includes('Parsing Failure') && (m.includes('ListNode') || m.includes('struct')))
-      return '\u26A0\uFE0F Fix: JSCPP cannot parse struct constructors. Use a createNode() helper function instead.';
-    if (m.includes(';;'))
+    if (
+      m.includes("Parsing Failure") &&
+      (m.includes("ListNode") || m.includes("struct"))
+    )
+      return "\u26A0\uFE0F Fix: JSCPP cannot parse struct constructors. Use a createNode() helper function instead.";
+    if (m.includes(";;"))
       return '\u26A0\uFE0F Fix: Double semicolon detected. Your struct already ends with ";", do not add another.';
-    if (m.includes('Infinite execution') || m.includes('20000'))
-      return '\u26A0\uFE0F Fix: Infinite loop detected. Check your while/for loop exit condition.';
-    if (m.includes('variable') && m.includes('does not exist'))
+    if (m.includes("Infinite execution") || m.includes("20000"))
+      return "\u26A0\uFE0F Fix: Infinite loop detected. Check your while/for loop exit condition.";
+    if (m.includes("variable") && m.includes("does not exist"))
       return `\u26A0\uFE0F Fix: ${m} — Check spelling, scope, or add "using namespace std;".`;
-    if (m.includes('Parsing Failure'))
+    if (m.includes("Parsing Failure"))
       return `\u26A0\uFE0F Parsing Error: The C++ engine could not read your code.\n\nDetails: ${m}`;
-    if (m.includes('Network error') || m.includes('CDN Error'))
-      return '\u26A0\uFE0F Network Error: Could not load the C++ engine. Check your internet connection.';
-    
+    if (m.includes("Network error") || m.includes("CDN Error"))
+      return "\u26A0\uFE0F Network Error: Could not load the C++ engine. Check your internet connection.";
+
     // Server-side GDB/GCC errors
-    if (m.includes('Compilation Error:')) {
+    if (m.includes("Compilation Error:")) {
       // Try to extract the core GCC error message to make it cleaner
-      const cleanErr = m.replace(/Compilation Error:\\n.*\/main\.cpp:\d+:\d+: (error|warning): /g, 'Syntax Error: ');
+      const cleanErr = m.replace(
+        /Compilation Error:\\n.*\/main\.cpp:\d+:\d+: (error|warning): /g,
+        "Syntax Error: ",
+      );
       return `\u26A0\uFE0F C++ Compilation Failed:\n\n${cleanErr}`;
     }
 
@@ -874,16 +895,23 @@ export default function VisualizerScreen() {
   const normalizeOutput = (str: string) => {
     if (!str) return "";
     // Trim spaces from the end of each individual line to prevent trailing space mismatch
-    return str.split('\n').map(line => line.trim()).join('\n').trim();
+    return str
+      .split("\n")
+      .map((line) => line.trim())
+      .join("\n")
+      .trim();
   };
 
   useEffect(() => {
     if (params.code) setCode(params.code as string);
     if (params.inputData) setInputs(params.inputData as string);
     if (params.language) setLanguage(params.language as "python" | "cpp");
-    if (params.expectedOutput) setExpectedOutput(params.expectedOutput as string);
-    if (params.timeComplexity) setTimeComplexity(params.timeComplexity as string);
-    if (params.spaceComplexity) setSpaceComplexity(params.spaceComplexity as string);
+    if (params.expectedOutput)
+      setExpectedOutput(params.expectedOutput as string);
+    if (params.timeComplexity)
+      setTimeComplexity(params.timeComplexity as string);
+    if (params.spaceComplexity)
+      setSpaceComplexity(params.spaceComplexity as string);
   }, [params]);
 
   // Reset ready state when language changes to prevent race conditions
@@ -914,6 +942,7 @@ export default function VisualizerScreen() {
           let nextVars = current.vars;
           let nextGlobs = current.globs;
           let nextFrames = current.frames;
+          let nextHeap = current.heap;
 
           for (let j = i + 1; j < rawTrace.length; j++) {
             if (rawTrace[j].func !== current.func || rawTrace[j].line === -1) {
@@ -923,12 +952,14 @@ export default function VisualizerScreen() {
               nextVars = rawTrace[j].vars;
               nextGlobs = rawTrace[j].globs;
               nextFrames = rawTrace[j].frames;
+              nextHeap = rawTrace[j].heap;
               break;
             }
           }
 
           current.vars = nextVars;
           current.globs = nextGlobs;
+          current.heap = nextHeap;
           if (nextFrames) current.frames = nextFrames;
 
           if (displayTrace.length > 0) {
@@ -969,46 +1000,89 @@ export default function VisualizerScreen() {
   useEffect(() => {
     const runRemoteCpp = async () => {
       try {
-        const backendUrl = process.env.EXPO_PUBLIC_CPP_BACKEND_URL;
+        const backendUrl = process.env.EXPO_PUBLIC_CPP_BACKEND_URL || "http://10.22.233.1:8085";
         if (!backendUrl) {
-          console.warn("No EXPO_PUBLIC_CPP_BACKEND_URL provided, falling back to local JSCPP.");
+          console.warn(
+            "No EXPO_PUBLIC_CPP_BACKEND_URL provided, falling back to local JSCPP.",
+          );
           return false;
         }
-        
+
         console.log(`Sending C++ code to remote backend: ${backendUrl}`);
-        const response = await fetch(backendUrl + '/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: code, input: inputs || "" })
+        const response = await fetch(backendUrl + "/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code, input: inputs || "" }),
         });
-        
+
         if (!response.ok) {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
-        
+
         const data = await response.json();
-        
+
+        // DEBUG: Log what backend actually returned
+        if (data && data.data && data.data.length > 0) {
+          const firstStep = data.data[0];
+          const lastStep = data.data[data.data.length - 1];
+          console.log(`[BACKEND] Total steps: ${data.data.length}`);
+          console.log(
+            `[BACKEND] Step 0 heap keys: ${JSON.stringify(Object.keys(firstStep.heap || {}))}`,
+          );
+          console.log(
+            `[BACKEND] Step 0 vars keys: ${JSON.stringify(Object.keys(firstStep.vars || {}))}`,
+          );
+          console.log(
+            `[BACKEND] Last step heap keys: ${JSON.stringify(Object.keys(lastStep.heap || {}))}`,
+          );
+          console.log(
+            `[BACKEND] Last step vars:`,
+            JSON.stringify(lastStep.vars || {}),
+          );
+          console.log(
+            `[BACKEND] Last step heap:`,
+            JSON.stringify(lastStep.heap || {}),
+          );
+        }
+
         // Simulate the format we expect from the WebView message
         handleMessage({ nativeEvent: { data: JSON.stringify(data) } });
         return true;
       } catch (e: any) {
         console.error("Remote C++ Execution Failed:", e);
-        handleMessage({ nativeEvent: { data: JSON.stringify({ type: 'error', data: `Remote Execution Failed: ${e.message}\nFallback to JSCPP...` }) } });
+        handleMessage({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: "error",
+              data: `Remote Execution Failed: ${e.message}\nFallback to JSCPP...`,
+            }),
+          },
+        });
         return false;
       }
     };
 
     if (isWebviewReady && code) {
       console.log(`Executing ${language} code now...`);
-      
-      if (language === "cpp" && process.env.EXPO_PUBLIC_CPP_BACKEND_URL) {
+
+      if (language === "cpp") {
         runRemoteCpp(); // Do not fallback to JSCPP so we can see real fetch errors
       } else {
         let jsCode = "";
         if (language === "python") {
-          jsCode = "runPythonCode(" + JSON.stringify(code) + ", " + JSON.stringify(inputs || "") + "); true;";
+          jsCode =
+            "runPythonCode(" +
+            JSON.stringify(code) +
+            ", " +
+            JSON.stringify(inputs || "") +
+            "); true;";
         } else {
-          jsCode = "runCppCode(" + JSON.stringify(code) + ", " + JSON.stringify(inputs || "") + "); true;";
+          jsCode =
+            "runCppCode(" +
+            JSON.stringify(code) +
+            ", " +
+            JSON.stringify(inputs || "") +
+            "); true;";
         }
         webviewRef.current?.injectJavaScript(jsCode);
       }
@@ -1022,7 +1096,12 @@ export default function VisualizerScreen() {
         setCurrentStep((prev) => {
           const nextStep = prev + 1;
           const nextTrace = traceLogs[nextStep];
-          if (nextTrace && nextTrace.line && nextTrace.line > 0 && breakpoints.has(nextTrace.line)) {
+          if (
+            nextTrace &&
+            nextTrace.line &&
+            nextTrace.line > 0 &&
+            breakpoints.has(nextTrace.line)
+          ) {
             setIsPlaying(false);
           }
           return nextStep;
@@ -1036,20 +1115,24 @@ export default function VisualizerScreen() {
 
   // Auto-scroll logic to center the EXECUTED line (previous line)
   const scrollToActiveLine = () => {
-    const prevLineNum = (currentStep > 0 && traceLogs[currentStep - 1] && !traceLogs[currentStep - 1].error)
-      ? traceLogs[currentStep - 1].line : undefined;
-    
+    const prevLineNum =
+      currentStep > 0 &&
+      traceLogs[currentStep - 1] &&
+      !traceLogs[currentStep - 1].error
+        ? traceLogs[currentStep - 1].line
+        : undefined;
+
     // Target the executed line if it exists, otherwise fallback to executing line
     const targetLine = prevLineNum || activeTrace?.line;
-    
+
     if (!targetLine || targetLine < 1) return;
-    
+
     const layout = lineOffsets.current[targetLine];
-    
+
     if (layout && codeScrollRef.current && scrollViewHeight > 0) {
       // Align to top of section with a small margin for better readability
       const targetY = Math.max(0, layout.y - 10);
-      
+
       codeScrollRef.current.scrollTo({
         y: targetY,
         animated: false,
@@ -1070,17 +1153,22 @@ export default function VisualizerScreen() {
   // Compute changed variables and change log purely during render (derived state)
   const { currentChangedVars, changeLog } = useMemo(() => {
     const vars = new Set<string>();
-    const log: {name: string; from: string; to: string}[] = [];
+    const log: { name: string; from: string; to: string }[] = [];
 
-    if (currentStep > 0 && traceLogs[currentStep] && traceLogs[currentStep - 1]) {
+    if (
+      currentStep > 0 &&
+      traceLogs[currentStep] &&
+      traceLogs[currentStep - 1]
+    ) {
       const prev = traceLogs[currentStep - 1];
       const curr = traceLogs[currentStep];
 
       const summarize = (v: any): string => {
-        if (!v) return 'undefined';
-        if (v._type === 'primitive') return String(v.data);
-        if (v._type === 'list') return `[${(v.data || []).map((i: any) => summarize(i)).join(', ')}]`;
-        if (v._type === 'raw') return String(v.data);
+        if (!v) return "undefined";
+        if (v._type === "primitive") return String(v.data);
+        if (v._type === "list")
+          return `[${(v.data || []).map((i: any) => summarize(i)).join(", ")}]`;
+        if (v._type === "raw") return String(v.data);
         return JSON.stringify(v.data ?? v).slice(0, 30);
       };
 
@@ -1089,7 +1177,11 @@ export default function VisualizerScreen() {
         for (const k in curr.vars) {
           if (JSON.stringify(curr.vars[k]) !== JSON.stringify(prev.vars[k])) {
             vars.add(`local:${k}`);
-            log.push({ name: k, from: summarize(prev.vars[k]), to: summarize(curr.vars[k]) });
+            log.push({
+              name: k,
+              from: summarize(prev.vars[k]),
+              to: summarize(curr.vars[k]),
+            });
           }
         }
       }
@@ -1099,7 +1191,11 @@ export default function VisualizerScreen() {
         for (const k in curr.globs) {
           if (JSON.stringify(curr.globs[k]) !== JSON.stringify(prev.globs[k])) {
             vars.add(`global:${k}`);
-            log.push({ name: k, from: summarize(prev.globs[k]), to: summarize(curr.globs[k]) });
+            log.push({
+              name: k,
+              from: summarize(prev.globs[k]),
+              to: summarize(curr.globs[k]),
+            });
           }
         }
       }
@@ -1112,7 +1208,11 @@ export default function VisualizerScreen() {
             for (const k in f.vars) {
               if (JSON.stringify(f.vars[k]) !== JSON.stringify(pf.vars[k])) {
                 vars.add(`${f.func}:${k}`);
-                log.push({ name: k, from: summarize(pf.vars[k]), to: summarize(f.vars[k]) });
+                log.push({
+                  name: k,
+                  from: summarize(pf.vars[k]),
+                  to: summarize(f.vars[k]),
+                });
               }
             }
           }
@@ -1124,7 +1224,11 @@ export default function VisualizerScreen() {
 
   // Auto-scroll variables panel to center changed variable
   useEffect(() => {
-    if (currentChangedVars.size > 0 && stateScrollRef.current && stateViewHeight > 0) {
+    if (
+      currentChangedVars.size > 0 &&
+      stateScrollRef.current &&
+      stateViewHeight > 0
+    ) {
       const firstChanged = Array.from(currentChangedVars)[0];
       const layout = varOffsets.current[firstChanged];
       if (layout) {
@@ -1145,7 +1249,7 @@ export default function VisualizerScreen() {
   };
 
   const togglePin = (varKey: string) => {
-    setPinnedVars(prev => {
+    setPinnedVars((prev) => {
       const next = new Set(prev);
       if (next.has(varKey)) next.delete(varKey);
       else next.add(varKey);
@@ -1155,13 +1259,15 @@ export default function VisualizerScreen() {
 
   const getPinnedVarValue = (varKey: string) => {
     if (!activeTrace) return undefined;
-    
+
     if (varKey.startsWith("local:")) {
       const name = varKey.split(":")[1];
-      if (activeTrace.vars && name in activeTrace.vars) return activeTrace.vars[name];
+      if (activeTrace.vars && name in activeTrace.vars)
+        return activeTrace.vars[name];
     } else if (varKey.startsWith("global:")) {
       const name = varKey.split(":")[1];
-      if (activeTrace.globs && name in activeTrace.globs) return activeTrace.globs[name];
+      if (activeTrace.globs && name in activeTrace.globs)
+        return activeTrace.globs[name];
     } else {
       const [funcName, name] = varKey.split(":");
       if (activeTrace.frames) {
@@ -1186,7 +1292,13 @@ export default function VisualizerScreen() {
   const handleShareJSON = async () => {
     setShowShareMenu(false);
     setIsSharing(true);
-    await shareTraceAsJSON(params.algorithm as string || "Algorithm", code, language, traceLogs, { time: timeComplexity, space: spaceComplexity });
+    await shareTraceAsJSON(
+      (params.algorithm as string) || "Algorithm",
+      code,
+      language,
+      traceLogs,
+      { time: timeComplexity, space: spaceComplexity },
+    );
     setIsSharing(false);
   };
 
@@ -1222,8 +1334,17 @@ export default function VisualizerScreen() {
       ) : (
         <View style={{ flex: 1 }}>
           {/* ---- Floating top bar ---- */}
-          <View style={[styles.floatingTopBar, isStateFullScreen && styles.floatingTopBarCompact]}>
-            <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.8}>
+          <View
+            style={[
+              styles.floatingTopBar,
+              isStateFullScreen && styles.floatingTopBarCompact,
+            ]}
+          >
+            <TouchableOpacity
+              style={styles.backBtn}
+              onPress={() => router.back()}
+              activeOpacity={0.8}
+            >
               <Text style={styles.backBtnText}>{"\u2190"}</Text>
             </TouchableOpacity>
             {!isStateFullScreen && (
@@ -1233,12 +1354,16 @@ export default function VisualizerScreen() {
                   <View style={styles.complexityBadgeRow}>
                     {timeComplexity ? (
                       <View style={[styles.complexityBadge, styles.timeBadge]}>
-                        <Text style={styles.timeBadgeText}>⏱ {timeComplexity}</Text>
+                        <Text style={styles.timeBadgeText}>
+                          ⏱ {timeComplexity}
+                        </Text>
                       </View>
                     ) : null}
                     {spaceComplexity ? (
                       <View style={[styles.complexityBadge, styles.spaceBadge]}>
-                        <Text style={styles.spaceBadgeText}>💾 {spaceComplexity}</Text>
+                        <Text style={styles.spaceBadgeText}>
+                          💾 {spaceComplexity}
+                        </Text>
                       </View>
                     ) : null}
                   </View>
@@ -1246,30 +1371,32 @@ export default function VisualizerScreen() {
               </View>
             )}
             <View style={styles.topBarRight}>
-              <TouchableOpacity 
-                style={styles.headerIconBtn} 
-                onPress={decreaseFontSize} 
+              <TouchableOpacity
+                style={styles.headerIconBtn}
+                onPress={decreaseFontSize}
                 activeOpacity={0.7}
               >
                 <Text style={styles.headerIconText}>A-</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.headerBtn} 
-                onPress={increaseFontSize} 
+              <TouchableOpacity
+                style={styles.headerBtn}
+                onPress={increaseFontSize}
                 activeOpacity={0.7}
               >
                 <Text style={styles.headerIconText}>A+</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.headerShareBtn} 
-                onPress={() => setShowVisualPanel(!showVisualPanel)} 
+              <TouchableOpacity
+                style={styles.headerShareBtn}
+                onPress={() => setShowVisualPanel(!showVisualPanel)}
                 activeOpacity={0.7}
               >
-                <Text style={{fontSize: 16, color: theme.text}}>{showVisualPanel ? "👁️" : "🙈"}</Text>
+                <Text style={{ fontSize: 16, color: theme.text }}>
+                  {showVisualPanel ? "👁️" : "🙈"}
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.headerShareBtn} 
-                onPress={() => setShowShareMenu(true)} 
+              <TouchableOpacity
+                style={styles.headerShareBtn}
+                onPress={() => setShowShareMenu(true)}
                 activeOpacity={0.7}
               >
                 <Share size={20} color="#38BDF8" />
@@ -1277,188 +1404,206 @@ export default function VisualizerScreen() {
             </View>
           </View>
 
-          {/* mainLayout fills remaining space. Controls always float on top. */}
-          <View style={styles.mainLayout} ref={visualizerContentRef} collapsable={false}>
-
-            {/* Visual Panel */}
-            {showVisualPanel && !isStateFullScreen && activeTrace && (activeTrace.vars || activeTrace.globs) && (
-              <DataStructureVisualizer 
-                vars={{ ...(activeTrace.globs || {}), ...(activeTrace.vars || {}) }} 
-                theme={theme} 
+          {/* mainLayout fills remaining space */}
+          <View
+            style={styles.mainLayout}
+            ref={visualizerContentRef}
+            collapsable={false}
+          >
+            {/* ── MEMORY GRAPH (top) ─────────────────────────────── */}
+            {showVisualPanel && activeTrace && (
+              <DataStructureVisualizer
+                vars={{
+                  ...(activeTrace.globs || {}),
+                  ...(activeTrace.vars || {}),
+                }}
+                heap={activeTrace.heap || {}}
+                theme={theme}
               />
             )}
 
-            {/* Full code view — kept mounted, toggled via display:none */}
-            <View style={[styles.codeContainer, isStateFullScreen && { display: 'none' }]}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionHeader}>Code</Text>
-                <Text style={[styles.sectionHeader, { color: '#38BDF8' }]}>
-                  {currentStep + 1} / {traceLogs.length}
-                </Text>
-              </View>
-              <View style={styles.progressBarTrack}>
-                <View style={[styles.progressBarFill, {
-                  width: `${traceLogs.length > 0 ? ((currentStep + 1) / traceLogs.length) * 100 : 0}%`
-                }]} />
-              </View>
-              <ScrollView 
-                ref={codeScrollRef}
-                style={styles.codeScroll} 
-                contentContainerStyle={{ paddingVertical: 8, paddingBottom: 24 }}
-                onLayout={(e) => setScrollViewHeight(e.nativeEvent.layout.height)}
-              >
-                {(code || "").split("\n").map((line, index) => {
-                  const isErrorLine = activeTrace?.error && activeTrace?.line === index + 1;
-                  const currentLineNum = activeTrace?.line;
-                  const prevLineNum = (currentStep > 0 && traceLogs[currentStep - 1] && !traceLogs[currentStep - 1].error)
-                      ? traceLogs[currentStep - 1].line : undefined;
-                  const isCurrentLine = currentLineNum === index + 1;
-                  const isPrevLine = prevLineNum === index + 1 && !isCurrentLine;
-                  return (
-                    <View 
-                      key={index} 
-                      style={[styles.codeLine, isPrevLine && styles.prevLine, isCurrentLine && styles.activeLine, isErrorLine && styles.errorLine]}
-                      onLayout={(e) => {
-                        const { y, height } = e.nativeEvent.layout;
-                        lineOffsets.current[index + 1] = { y, height };
-                        const prevLineNum = (currentStep > 0 && traceLogs[currentStep - 1] && !traceLogs[currentStep - 1].error)
-                          ? traceLogs[currentStep - 1].line : undefined;
-                        const targetLine = prevLineNum || activeTrace?.line;
-                        if (targetLine === index + 1) {
-                          scrollToActiveLine();
-                        }
-                      }}
-                    >
-                      <TouchableOpacity 
-                        style={styles.lineNumberContainer} 
-                        onPress={() => toggleBreakpoint(index + 1)} 
-                        activeOpacity={0.8}
-                      >
-                        {breakpoints.has(index + 1) && <View style={styles.breakpointDot} />}
-                        <Text style={[styles.lineNumber, isPrevLine && { color: '#8aa1bf' }, breakpoints.has(index + 1) && styles.lineNumberBreakpoint]}>{index + 1}</Text>
-                      </TouchableOpacity>
-                      <Text style={[styles.codeText, { color: theme.text }]}>{line}</Text>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            </View>
-
-            {/* Mini code strip — kept mounted, toggled via display:none */}
-            <View style={[styles.miniCodeContainer, !isStateFullScreen && { display: 'none' }]}>
-              {(() => {
-                const currentLineNum = activeTrace?.line;
-                const prevLineNum = (currentStep > 0 && traceLogs[currentStep - 1] && !traceLogs[currentStep - 1].error)
-                    ? traceLogs[currentStep - 1].line : undefined;
-                const hasPrev = !!(prevLineNum && prevLineNum > 0 && prevLineNum !== currentLineNum);
-                const hasCurrent = !!(currentLineNum && currentLineNum > 0);
-                const actualExpanded = !hasPrev ? 'executing' : !hasCurrent ? 'executed' : expandedLine;
-                return (
-                  <View style={styles.miniCodeStrip}>
-                    {hasPrev && (
-                      actualExpanded === 'executed' ? (
-                        <TouchableOpacity style={styles.miniCodePillExpanded} onPress={() => setExpandedLine(null)} activeOpacity={0.8}>
-                          <View style={styles.miniCodePillHeader}>
-                            <Text style={styles.miniCodePillLabel}>{"\u2713"} Executed</Text>
-                            <Text style={styles.miniCodeCollapseHint}>tap to split {"\u21D4"}</Text>
-                          </View>
-                          <View style={[styles.miniCodePillLine, styles.prevLine]}>
-                            <Text style={[styles.lineNumber, { color: '#8aa1bf', width: 26 }]}>{prevLineNum}</Text>
-                            <Text style={[styles.miniCodePillText, { fontSize: 13, color: theme.text }]}>{(code || "").split("\n")[prevLineNum! - 1]?.trim()}</Text>
-                          </View>
-                        </TouchableOpacity>
-                      ) : actualExpanded === 'executing' ? (
-                        <TouchableOpacity style={styles.miniCodeTab} onPress={() => setExpandedLine('executed')} activeOpacity={0.8}>
-                          <Text style={styles.miniCodeTabLabel}>{"\u2713"}</Text>
-                          <Text style={styles.miniCodeTabLineNum}>{prevLineNum}</Text>
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity style={styles.miniCodePill} onPress={() => setExpandedLine('executed')} activeOpacity={0.8}>
-                          <View style={styles.miniCodePillHeader}>
-                            <Text style={styles.miniCodePillLabel}>Executed</Text>
-                            <Text style={styles.miniCodeExpandHint}>{"\u21D4"}</Text>
-                          </View>
-                          <View style={[styles.miniCodePillLine, styles.prevLine]}>
-                            <Text style={[styles.lineNumber, { color: '#8aa1bf', width: 22 }]}>{prevLineNum}</Text>
-                            <Text style={[styles.miniCodePillText, { color: theme.text }]}>{(code || "").split("\n")[prevLineNum! - 1]?.trim()}</Text>
-                          </View>
-                        </TouchableOpacity>
-                      )
-                    )}
-                    {hasPrev && hasCurrent && !actualExpanded && <View style={styles.miniCodeDivider} />}
-                    {hasCurrent && (
-                      actualExpanded === 'executing' ? (
-                        <TouchableOpacity style={styles.miniCodePillExpanded} onPress={() => setExpandedLine(null)} activeOpacity={0.8}>
-                          <View style={styles.miniCodePillHeader}>
-                            <Text style={[styles.miniCodePillLabel, { color: '#34D399' }]}>{"\u25B6"} Executing</Text>
-                            <Text style={styles.miniCodeCollapseHint}>tap to split {"\u21D4"}</Text>
-                          </View>
-                          <View style={[styles.miniCodePillLine, styles.activeLine]}>
-                            <Text style={[styles.lineNumber, { width: 26 }]}>{currentLineNum}</Text>
-                            <Text style={[styles.miniCodePillText, { fontSize: 13, color: theme.text }]}>{(code || "").split("\n")[currentLineNum! - 1]?.trim()}</Text>
-                          </View>
-                        </TouchableOpacity>
-                      ) : actualExpanded === 'executed' ? (
-                        <TouchableOpacity style={[styles.miniCodeTab, { borderColor: '#064E3B' }]} onPress={() => setExpandedLine('executing')} activeOpacity={0.8}>
-                          <Text style={[styles.miniCodeTabLabel, { color: '#34D399' }]}>{"\u25B6"}</Text>
-                          <Text style={styles.miniCodeTabLineNum}>{currentLineNum}</Text>
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity style={[styles.miniCodePill, { flex: 1.4 }]} onPress={() => setExpandedLine('executing')} activeOpacity={0.8}>
-                          <View style={styles.miniCodePillHeader}>
-                            <Text style={[styles.miniCodePillLabel, { color: '#34D399' }]}>Executing</Text>
-                            <Text style={styles.miniCodeExpandHint}>{"\u21D4"}</Text>
-                          </View>
-                          <View style={[styles.miniCodePillLine, styles.activeLine]}>
-                            <Text style={[styles.lineNumber, { width: 22 }]}>{currentLineNum}</Text>
-                            <Text style={[styles.miniCodePillText, { color: theme.text }]}>{(code || "").split("\n")[currentLineNum! - 1]?.trim()}</Text>
-                          </View>
-                        </TouchableOpacity>
-                      )
-                    )}
-                    {!hasCurrent && !hasPrev && (
-                      <Text style={[styles.miniCodePillLabel, { color: '#64748B', alignSelf: 'center', flex: 1, textAlign: 'center' }]}>
-                        {"\u2713"} All lines executed
-                      </Text>
-                    )}
-                  </View>
-                );
-              })()}
-            </View>
-
-            {/* Variables panel */}
-            <View style={[styles.stateContainer, isStateFullScreen && { flex: 1 }]}>
-              <View style={styles.sectionHeaderRow}>
-                <Text style={styles.sectionHeader}>Variables</Text>
-                <TouchableOpacity onPress={() => setIsStateFullScreen(!isStateFullScreen)} style={styles.iconBtn}>
-                  <Text style={[styles.iconBtnText, { color: theme.accentLight }]}>{isStateFullScreen ? "\u2199 Collapse" : "\u2197 Expand"}</Text>
+            {/* ── TAB BAR ──────────────────────────────────────────── */}
+            <View
+              style={{
+                flexDirection: "row",
+                borderTopWidth: 1,
+                borderTopColor: theme.border,
+                borderBottomWidth: 1,
+                borderBottomColor: theme.border,
+                backgroundColor: theme.card,
+              }}
+            >
+              {(["code", "vars", "console"] as const).map((tab) => (
+                <TouchableOpacity
+                  key={tab}
+                  onPress={() => setActiveTab(tab)}
+                  style={{
+                    flex: 1,
+                    paddingVertical: 8,
+                    alignItems: "center",
+                    borderBottomWidth: 2,
+                    borderBottomColor:
+                      activeTab === tab ? theme.accent : "transparent",
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={{
+                      color: activeTab === tab ? theme.accent : theme.textMuted,
+                      fontSize: 11,
+                      fontWeight: activeTab === tab ? "bold" : "normal",
+                    }}
+                  >
+                    {tab === "code"
+                      ? "📄 Code"
+                      : tab === "vars"
+                        ? "📦 Variables"
+                        : "🖥 Console"}
+                  </Text>
                 </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* ── CODE TAB ─────────────────────────────────────────── */}
+            {activeTab === "code" && (
+              <View style={[styles.codeContainer, { flex: 1 }]}>
+                <View style={styles.sectionHeaderRow}>
+                  <Text style={styles.sectionHeader}>Code</Text>
+                  <Text style={[styles.sectionHeader, { color: "#38BDF8" }]}>
+                    {currentStep + 1} / {traceLogs.length}
+                  </Text>
+                </View>
+                <View style={styles.progressBarTrack}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      {
+                        width: `${traceLogs.length > 0 ? ((currentStep + 1) / traceLogs.length) * 100 : 0}%`,
+                      },
+                    ]}
+                  />
+                </View>
+                <ScrollView
+                  ref={codeScrollRef}
+                  style={styles.codeScroll}
+                  contentContainerStyle={{
+                    paddingVertical: 8,
+                    paddingBottom: 80,
+                  }}
+                  onLayout={(e) =>
+                    setScrollViewHeight(e.nativeEvent.layout.height)
+                  }
+                >
+                  {(code || "").split("\n").map((line, index) => {
+                    const isErrorLine =
+                      activeTrace?.error && activeTrace?.line === index + 1;
+                    const currentLineNum = activeTrace?.line;
+                    const prevLineNum =
+                      currentStep > 0 &&
+                      traceLogs[currentStep - 1] &&
+                      !traceLogs[currentStep - 1].error
+                        ? traceLogs[currentStep - 1].line
+                        : undefined;
+                    const isCurrentLine = currentLineNum === index + 1;
+                    const isPrevLine =
+                      prevLineNum === index + 1 && !isCurrentLine;
+                    return (
+                      <View
+                        key={index}
+                        style={[
+                          styles.codeLine,
+                          isPrevLine && styles.prevLine,
+                          isCurrentLine && styles.activeLine,
+                          isErrorLine && styles.errorLine,
+                        ]}
+                        onLayout={(e) => {
+                          const { y, height } = e.nativeEvent.layout;
+                          lineOffsets.current[index + 1] = { y, height };
+                          const targetLine = prevLineNum || activeTrace?.line;
+                          if (targetLine === index + 1) scrollToActiveLine();
+                        }}
+                      >
+                        <TouchableOpacity
+                          style={styles.lineNumberContainer}
+                          onPress={() => toggleBreakpoint(index + 1)}
+                          activeOpacity={0.8}
+                        >
+                          {breakpoints.has(index + 1) && (
+                            <View style={styles.breakpointDot} />
+                          )}
+                          <Text
+                            style={[
+                              styles.lineNumber,
+                              isPrevLine && { color: "#8aa1bf" },
+                              breakpoints.has(index + 1) &&
+                                styles.lineNumberBreakpoint,
+                            ]}
+                          >
+                            {index + 1}
+                          </Text>
+                        </TouchableOpacity>
+                        <Text style={[styles.codeText, { color: theme.text }]}>
+                          {line}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </ScrollView>
               </View>
-              <ScrollView 
+            )}
+
+            {/* ── VARIABLES TAB ────────────────────────────────────── */}
+            {activeTab === "vars" && (
+              <ScrollView
                 ref={stateScrollRef}
-                style={styles.stateScroll} 
-                contentContainerStyle={{ padding: 12, paddingBottom: isStateFullScreen ? 120 : 40 }}
-                onLayout={(e) => setStateViewHeight(e.nativeEvent.layout.height)}
+                style={[styles.stateScroll, { flex: 1 }]}
+                contentContainerStyle={{ padding: 12, paddingBottom: 80 }}
+                onLayout={(e) =>
+                  setStateViewHeight(e.nativeEvent.layout.height)
+                }
               >
                 {pinnedVars.size > 0 && (
-                  <View style={[styles.scopeContainer, { borderColor: 'rgba(252, 211, 77, 0.3)', borderWidth: 1, backgroundColor: 'rgba(252, 211, 77, 0.05)' }]}>
-                    <Text style={[styles.scopeHeaderText, { color: '#FCD34D' }]}>📌 Pinned Variables (Watch)</Text>
-                    {Array.from(pinnedVars).map(varKey => {
+                  <View
+                    style={[
+                      styles.scopeContainer,
+                      {
+                        borderColor: "rgba(252,211,77,0.3)",
+                        borderWidth: 1,
+                        backgroundColor: "rgba(252,211,77,0.05)",
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.scopeHeaderText, { color: "#FCD34D" }]}
+                    >
+                      📌 Pinned Variables
+                    </Text>
+                    {Array.from(pinnedVars).map((varKey) => {
                       const val = getPinnedVarValue(varKey);
                       const displayName = varKey.split(":")[1];
                       return (
-                        <TouchableOpacity 
+                        <TouchableOpacity
                           key={`watch-${varKey}`}
                           activeOpacity={0.7}
                           onLongPress={() => togglePin(varKey)}
                           style={styles.varRow}
                         >
-                          <View style={styles.varNameContainer}><Text style={styles.varName}>{displayName}</Text></View>
+                          <View style={styles.varNameContainer}>
+                            <Text style={styles.varName}>{displayName}</Text>
+                          </View>
                           <View style={styles.varValueContainer}>
                             {val !== undefined ? (
                               <VariableViewer variable={val} />
                             ) : (
-                              <Text style={{ color: '#64748B', fontStyle: 'italic', fontSize: 13 }}>Out of scope</Text>
+                              <Text
+                                style={{
+                                  color: "#64748B",
+                                  fontStyle: "italic",
+                                  fontSize: 13,
+                                }}
+                              >
+                                Out of scope
+                              </Text>
                             )}
                           </View>
                         </TouchableOpacity>
@@ -1468,120 +1613,185 @@ export default function VisualizerScreen() {
                 )}
                 {activeTrace?.frames && activeTrace.frames.length > 0 ? (
                   activeTrace.frames.map((frame, frameIdx) => (
-                    <View 
-                      key={`frame-${frameIdx}-${frame.func}`} 
+                    <View
+                      key={`frame-${frameIdx}-${frame.func}`}
                       style={styles.scopeContainer}
                       onLayout={(e) => {
-                        scopeOffsets.current[frame.func] = e.nativeEvent.layout.y;
+                        scopeOffsets.current[frame.func] =
+                          e.nativeEvent.layout.y;
                       }}
                     >
-                      <Text style={styles.scopeHeaderText}>Local Scope ({frame.func})</Text>
+                      <Text style={styles.scopeHeaderText}>
+                        Local Scope ({frame.func})
+                      </Text>
                       {Object.keys(frame.vars).length > 0 ? (
                         Object.entries(frame.vars).map(([name, value]) => {
                           const varKey = `${frame.func}:${name}`;
                           const isHighlighted = currentChangedVars.has(varKey);
                           return (
-                            <TouchableOpacity 
-                              key={name} 
+                            <TouchableOpacity
+                              key={name}
                               activeOpacity={0.7}
                               onLongPress={() => togglePin(varKey)}
-                              style={[styles.varRow, isHighlighted && styles.varRowHighlighted]}
+                              style={[
+                                styles.varRow,
+                                isHighlighted && styles.varRowHighlighted,
+                              ]}
                               onLayout={(e) => {
                                 const { y, height } = e.nativeEvent.layout;
-                                const absoluteY = (scopeOffsets.current[frame.func] || 0) + y;
-                                varOffsets.current[varKey] = { y: absoluteY, height };
+                                varOffsets.current[varKey] = {
+                                  y:
+                                    (scopeOffsets.current[frame.func] || 0) + y,
+                                  height,
+                                };
                               }}
                             >
                               <View style={styles.varNameContainer}>
                                 <Text style={styles.varName}>
                                   {String(name)}
-                                  {pinnedVars.has(varKey) && <Text style={{ fontSize: 10, color: '#FCD34D' }}> 📌</Text>}
+                                  {pinnedVars.has(varKey) && (
+                                    <Text
+                                      style={{ fontSize: 10, color: "#FCD34D" }}
+                                    >
+                                      {" "}
+                                      📌
+                                    </Text>
+                                  )}
                                 </Text>
                               </View>
-                              <View style={styles.varValueContainer}><VariableViewer variable={value} /></View>
+                              <View style={styles.varValueContainer}>
+                                <VariableViewer variable={value} />
+                              </View>
                             </TouchableOpacity>
                           );
                         })
                       ) : (
-                        <Text style={styles.emptyState}>No local variables tracked in {frame.func}.</Text>
+                        <Text style={styles.emptyState}>
+                          No local variables in {frame.func}.
+                        </Text>
                       )}
                     </View>
                   ))
                 ) : (
                   <>
-                    {activeTrace?.func && activeTrace.func !== "Global Scope" && (
-                      <Text style={styles.scopeHeaderText}>Local Scope ({activeTrace.func})</Text>
-                    )}
-                    {!activeTrace || !activeTrace.vars || Object.keys(activeTrace.vars).length === 0 ? (
-                      <Text style={styles.emptyState}>No local variables tracked.</Text>
+                    {activeTrace?.func &&
+                      activeTrace.func !== "Global Scope" && (
+                        <Text style={styles.scopeHeaderText}>
+                          Local Scope ({activeTrace.func})
+                        </Text>
+                      )}
+                    {!activeTrace ||
+                    !activeTrace.vars ||
+                    Object.keys(activeTrace.vars).length === 0 ? (
+                      <Text style={styles.emptyState}>
+                        No local variables tracked.
+                      </Text>
                     ) : (
                       Object.entries(activeTrace.vars).map(([name, value]) => {
                         const varKey = `local:${name}`;
                         const isHighlighted = currentChangedVars.has(varKey);
                         return (
-                          <TouchableOpacity 
-                            key={name} 
+                          <TouchableOpacity
+                            key={name}
                             activeOpacity={0.7}
                             onLongPress={() => togglePin(varKey)}
-                            style={[styles.varRow, isHighlighted && styles.varRowHighlighted]}
+                            style={[
+                              styles.varRow,
+                              isHighlighted && styles.varRowHighlighted,
+                            ]}
                             onLayout={(e) => {
                               const { y, height } = e.nativeEvent.layout;
-                              // Top-level local vars in Python are not nested in a scopeContainer
                               varOffsets.current[varKey] = { y, height };
                             }}
                           >
                             <View style={styles.varNameContainer}>
                               <Text style={styles.varName}>
                                 {String(name)}
-                                {pinnedVars.has(varKey) && <Text style={{ fontSize: 10, color: '#FCD34D' }}> 📌</Text>}
+                                {pinnedVars.has(varKey) && (
+                                  <Text
+                                    style={{ fontSize: 10, color: "#FCD34D" }}
+                                  >
+                                    {" "}
+                                    📌
+                                  </Text>
+                                )}
                               </Text>
                             </View>
-                            <View style={styles.varValueContainer}><VariableViewer variable={value} /></View>
+                            <View style={styles.varValueContainer}>
+                              <VariableViewer variable={value} />
+                            </View>
                           </TouchableOpacity>
                         );
                       })
                     )}
-                  </>
-                )}
-                {activeTrace?.globs && Object.keys(activeTrace.globs).length > 0 && (
-                  <View 
-                    style={styles.globalsContainer}
-                    onLayout={(e) => {
-                      scopeOffsets.current['global'] = e.nativeEvent.layout.y;
-                    }}
-                  >
-                    <Text style={styles.scopeHeaderText}>Global Scope</Text>
-                    {Object.entries(activeTrace.globs).map(([name, value]) => {
-                      const varKey = `global:${name}`;
-                      const isHighlighted = currentChangedVars.has(varKey);
-                      return (
-                        <TouchableOpacity 
-                          key={name} 
-                          activeOpacity={0.7}
-                          onLongPress={() => togglePin(varKey)}
-                          style={[styles.varRow, isHighlighted && styles.varRowHighlighted]}
+                    {activeTrace?.globs &&
+                      Object.keys(activeTrace.globs).length > 0 && (
+                        <View
+                          style={styles.globalsContainer}
                           onLayout={(e) => {
-                            const { y, height } = e.nativeEvent.layout;
-                            const absoluteY = (scopeOffsets.current['global'] || 0) + y;
-                            varOffsets.current[varKey] = { y: absoluteY, height };
+                            scopeOffsets.current["global"] =
+                              e.nativeEvent.layout.y;
                           }}
                         >
-                          <View style={styles.varNameContainer}>
-                            <Text style={styles.varName}>
-                              {String(name)}
-                              {pinnedVars.has(varKey) && <Text style={{ fontSize: 10, color: '#FCD34D' }}> 📌</Text>}
-                            </Text>
-                          </View>
-                          <View style={styles.varValueContainer}><VariableViewer variable={value} /></View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
+                          <Text style={styles.scopeHeaderText}>
+                            Global Scope
+                          </Text>
+                          {Object.entries(activeTrace.globs).map(
+                            ([name, value]) => {
+                              const varKey = `global:${name}`;
+                              const isHighlighted =
+                                currentChangedVars.has(varKey);
+                              return (
+                                <TouchableOpacity
+                                  key={name}
+                                  activeOpacity={0.7}
+                                  onLongPress={() => togglePin(varKey)}
+                                  style={[
+                                    styles.varRow,
+                                    isHighlighted && styles.varRowHighlighted,
+                                  ]}
+                                  onLayout={(e) => {
+                                    const { y, height } = e.nativeEvent.layout;
+                                    varOffsets.current[varKey] = {
+                                      y:
+                                        (scopeOffsets.current["global"] || 0) +
+                                        y,
+                                      height,
+                                    };
+                                  }}
+                                >
+                                  <View style={styles.varNameContainer}>
+                                    <Text style={styles.varName}>
+                                      {String(name)}
+                                      {pinnedVars.has(varKey) && (
+                                        <Text
+                                          style={{
+                                            fontSize: 10,
+                                            color: "#FCD34D",
+                                          }}
+                                        >
+                                          {" "}
+                                          📌
+                                        </Text>
+                                      )}
+                                    </Text>
+                                  </View>
+                                  <View style={styles.varValueContainer}>
+                                    <VariableViewer variable={value} />
+                                  </View>
+                                </TouchableOpacity>
+                              );
+                            },
+                          )}
+                        </View>
+                      )}
+                  </>
                 )}
                 {activeTrace?.error && (
-                  <Text style={styles.errorText}>{friendlyError(activeTrace.error)}</Text>
+                  <Text style={styles.errorText}>
+                    {friendlyError(activeTrace.error)}
+                  </Text>
                 )}
-                {/* Change Log */}
                 {changeLog.length > 0 && (
                   <View style={styles.changeLogContainer}>
                     <Text style={styles.changeLogTitle}>CHANGES THIS STEP</Text>
@@ -1589,99 +1799,148 @@ export default function VisualizerScreen() {
                       <View key={i} style={styles.changeLogRow}>
                         <Text style={styles.changeLogName}>{entry.name}</Text>
                         <Text style={styles.changeLogFrom}>{entry.from}</Text>
-                        <Text style={styles.changeLogArrow}>{' \u2192 '}</Text>
+                        <Text style={styles.changeLogArrow}>{" → "}</Text>
                         <Text style={styles.changeLogTo}>{entry.to}</Text>
                       </View>
                     ))}
                   </View>
                 )}
               </ScrollView>
-            </View>
-
-            {/* Console â€” hidden in fullscreen */}
-            {!isStateFullScreen && (
-              <View style={styles.outputContainer}>
-                <TouchableOpacity style={styles.sectionHeaderRow} onPress={() => setIsConsoleExpanded(!isConsoleExpanded)}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <Text style={styles.sectionHeader}>Console</Text>
-                    {expectedOutput && currentStep === traceLogs.length - 1 && activeTrace && !activeTrace.error && (
-                      <View style={[
-                        styles.diffBadge, 
-                        normalizeOutput(String(activeTrace.output)) === normalizeOutput(expectedOutput) ? styles.diffBadgePass : styles.diffBadgeFail
-                      ]}>
-                        <Text style={styles.diffBadgeText}>
-                          {normalizeOutput(String(activeTrace.output)) === normalizeOutput(expectedOutput) ? '✅ PASS' : '❌ FAIL'}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                  <Text style={styles.iconBtnText}>{isConsoleExpanded ? "\u25B2" : "\u25BC"}</Text>
-                </TouchableOpacity>
-                {isConsoleExpanded && (
-                  <ScrollView style={styles.outputScroll} contentContainerStyle={{ padding: 12, paddingBottom: 20 }}>
-                    <Text style={styles.outputText}>{activeTrace?.output ? String(activeTrace.output) : "> "}</Text>
-                    {expectedOutput && currentStep === traceLogs.length - 1 && activeTrace && !activeTrace.error && normalizeOutput(String(activeTrace.output)) !== normalizeOutput(expectedOutput) && (
-                      <View style={styles.diffContainer}>
-                        <Text style={styles.diffHeader}>Expected Output:</Text>
-                        <Text style={styles.diffExpectedText}>{expectedOutput}</Text>
-                      </View>
-                    )}
-                  </ScrollView>
-                )}
-              </View>
             )}
-            
-            {/* Controls — Floats in fullscreen, sits at bottom in normal view */}
-          <View style={[
-            styles.controlsBar,
-            isStateFullScreen ? styles.controlsBarFloating : styles.controlsBarNormal,
-            isStateFullScreen && styles.controlsBarCompact,
-          ]}>
-            {/* Speed buttons */}
-            <View style={styles.speedBtnGroup}>
-              {[{ label: '0.5x', ms: 1600 }, { label: '1x', ms: 800 }, { label: '2x', ms: 400 }, { label: '5x', ms: 160 }].map(s => (
+
+            {/* ── CONSOLE TAB ──────────────────────────────────────── */}
+            {activeTab === "console" && (
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ padding: 12, paddingBottom: 80 }}
+              >
+                <Text style={styles.outputText}>
+                  {activeTrace?.output ? String(activeTrace.output) : "> "}
+                </Text>
+                {expectedOutput &&
+                  currentStep === traceLogs.length - 1 &&
+                  activeTrace &&
+                  !activeTrace.error && (
+                    <View
+                      style={[
+                        styles.diffBadge,
+                        normalizeOutput(String(activeTrace.output)) ===
+                        normalizeOutput(expectedOutput)
+                          ? styles.diffBadgePass
+                          : styles.diffBadgeFail,
+                        { marginTop: 12 },
+                      ]}
+                    >
+                      <Text style={styles.diffBadgeText}>
+                        {normalizeOutput(String(activeTrace.output)) ===
+                        normalizeOutput(expectedOutput)
+                          ? "✅ PASS"
+                          : "❌ FAIL"}
+                      </Text>
+                    </View>
+                  )}
+                {expectedOutput &&
+                  currentStep === traceLogs.length - 1 &&
+                  activeTrace &&
+                  !activeTrace.error &&
+                  normalizeOutput(String(activeTrace.output)) !==
+                    normalizeOutput(expectedOutput) && (
+                    <View style={styles.diffContainer}>
+                      <Text style={styles.diffHeader}>Expected Output:</Text>
+                      <Text style={styles.diffExpectedText}>
+                        {expectedOutput}
+                      </Text>
+                    </View>
+                  )}
+              </ScrollView>
+            )}
+
+            {/* ── CONTROLS (always floating at bottom) ─────────────── */}
+            <View style={[styles.controlsBar, styles.controlsBarNormal]}>
+              <View style={styles.speedBtnGroup}>
+                {[
+                  { label: "0.5x", ms: 1600 },
+                  { label: "1x", ms: 800 },
+                  { label: "2x", ms: 400 },
+                  { label: "5x", ms: 160 },
+                ].map((s) => (
+                  <TouchableOpacity
+                    key={s.ms}
+                    style={[
+                      styles.speedBtn,
+                      playbackSpeed === s.ms && styles.speedBtnActive,
+                    ]}
+                    onPress={() => setPlaybackSpeed(s.ms)}
+                    activeOpacity={0.7}
+                  >
+                    <Text
+                      style={[
+                        styles.speedBtnText,
+                        playbackSpeed === s.ms && styles.speedBtnTextActive,
+                      ]}
+                    >
+                      {s.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={styles.navBtnGroup}>
                 <TouchableOpacity
-                  key={s.ms}
-                  style={[styles.speedBtn, playbackSpeed === s.ms && styles.speedBtnActive]}
-                  onPress={() => setPlaybackSpeed(s.ms)}
+                  style={[
+                    styles.controlIconBtn,
+                    currentStep <= 0 && styles.controlBtnDisabled,
+                  ]}
+                  onPress={handleStepPrev}
+                  disabled={currentStep <= 0}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.speedBtnText, playbackSpeed === s.ms && styles.speedBtnTextActive]}>{s.label}</Text>
+                  <Text
+                    style={[
+                      styles.controlIconText,
+                      currentStep <= 0 && styles.disabledText,
+                    ]}
+                  >
+                    {"\u2190"}
+                  </Text>
                 </TouchableOpacity>
-              ))}
+                <TouchableOpacity
+                  style={[
+                    styles.controlIconBtnPlay,
+                    isPlaying && styles.controlBtnActive,
+                  ]}
+                  onPress={handlePlayPause}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.controlIconTextPlay}>
+                    {isPlaying ? "\u2016" : "\u25B6"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.controlIconBtn,
+                    currentStep >= traceLogs.length - 1 &&
+                      styles.controlBtnDisabled,
+                  ]}
+                  onPress={handleStepNext}
+                  disabled={currentStep >= traceLogs.length - 1}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.controlIconText,
+                      currentStep >= traceLogs.length - 1 &&
+                        styles.disabledText,
+                    ]}
+                  >
+                    {"\u2192"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
-
-            <View style={styles.navBtnGroup}>
-              <TouchableOpacity 
-                style={[styles.controlIconBtn, currentStep <= 0 && styles.controlBtnDisabled]} 
-                onPress={handleStepPrev} 
-                disabled={currentStep <= 0}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.controlIconText, currentStep <= 0 && styles.disabledText]}>{"\u2190"}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.controlIconBtnPlay, isPlaying && styles.controlBtnActive]} 
-                onPress={handlePlayPause}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.controlIconTextPlay}>{isPlaying ? "\u2016" : "\u25B6"}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity 
-                style={[styles.controlIconBtn, currentStep >= traceLogs.length - 1 && styles.controlBtnDisabled]} 
-                onPress={handleStepNext} 
-                disabled={currentStep >= traceLogs.length - 1}
-                activeOpacity={0.7}
-              >
-                <Text style={[styles.controlIconText, currentStep >= traceLogs.length - 1 && styles.disabledText]}>{"\u2192"}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
           </View>
         </View>
       )}
+
       {/* ---- Share Menu Modal ---- */}
       <Modal
         visible={showShareMenu}
@@ -1689,12 +1948,16 @@ export default function VisualizerScreen() {
         animationType="slide"
         onRequestClose={() => setShowShareMenu(false)}
       >
-        <TouchableOpacity 
-          style={styles.modalOverlay} 
-          activeOpacity={1} 
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
           onPress={() => setShowShareMenu(false)}
         >
-          <BlurView intensity={20} tint="dark" style={StyleSheet.absoluteFill} />
+          <BlurView
+            intensity={20}
+            tint="dark"
+            style={StyleSheet.absoluteFill}
+          />
           <View style={styles.shareSheet}>
             <View style={styles.shareHeader}>
               <Text style={styles.shareTitle}>Share Dry Run</Text>
@@ -1704,31 +1967,47 @@ export default function VisualizerScreen() {
             </View>
 
             <View style={styles.shareOptions}>
-              <TouchableOpacity 
-                style={styles.shareOption} 
+              <TouchableOpacity
+                style={styles.shareOption}
                 onPress={handleShareJSON}
                 activeOpacity={0.8}
               >
-                <View style={[styles.shareIconBox, { backgroundColor: 'rgba(56, 189, 248, 0.1)' }]}>
+                <View
+                  style={[
+                    styles.shareIconBox,
+                    { backgroundColor: "rgba(56, 189, 248, 0.1)" },
+                  ]}
+                >
                   <FileJson size={24} color="#38BDF8" />
                 </View>
                 <View style={styles.shareTextContent}>
                   <Text style={styles.shareOptionTitle}>Export Full Trace</Text>
-                  <Text style={styles.shareOptionDesc}>Save code and all steps as a .json file</Text>
+                  <Text style={styles.shareOptionDesc}>
+                    Save code and all steps as a .json file
+                  </Text>
                 </View>
               </TouchableOpacity>
 
-              <TouchableOpacity 
-                style={styles.shareOption} 
+              <TouchableOpacity
+                style={styles.shareOption}
                 onPress={handleShareImage}
                 activeOpacity={0.8}
               >
-                <View style={[styles.shareIconBox, { backgroundColor: 'rgba(244, 114, 182, 0.1)' }]}>
+                <View
+                  style={[
+                    styles.shareIconBox,
+                    { backgroundColor: "rgba(244, 114, 182, 0.1)" },
+                  ]}
+                >
                   <Camera size={24} color="#F472B6" />
                 </View>
                 <View style={styles.shareTextContent}>
-                  <Text style={styles.shareOptionTitle}>Save Step Snapshot</Text>
-                  <Text style={styles.shareOptionDesc}>Save current variables as a .png image</Text>
+                  <Text style={styles.shareOptionTitle}>
+                    Save Step Snapshot
+                  </Text>
+                  <Text style={styles.shareOptionDesc}>
+                    Save current variables as a .png image
+                  </Text>
                 </View>
               </TouchableOpacity>
             </View>
@@ -1739,9 +2018,15 @@ export default function VisualizerScreen() {
       {/* Global Sharing Overlay */}
       {isSharing && (
         <View style={styles.sharingOverlay}>
-          <BlurView intensity={40} tint={isDark ? "dark" : "light"} style={StyleSheet.absoluteFill} />
+          <BlurView
+            intensity={40}
+            tint={isDark ? "dark" : "light"}
+            style={StyleSheet.absoluteFill}
+          />
           <ActivityIndicator size="large" color={theme.accentLight} />
-          <Text style={styles.sharingText}>Generating Shareable Content...</Text>
+          <Text style={styles.sharingText}>
+            Generating Shareable Content...
+          </Text>
         </View>
       )}
     </View>
@@ -1750,494 +2035,662 @@ export default function VisualizerScreen() {
 
 function createStyles(theme: any, isDark: boolean, fontSize: number = 14) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.background },
+    container: { flex: 1, backgroundColor: theme.background },
 
-  loadingContainer: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: theme.background },
-  loadingText: { color: theme.textMuted, marginTop: 16, fontSize: 16, fontWeight: "500" },
-  
-  mainLayout: { flex: 1, flexDirection: "column", paddingHorizontal: 12, paddingBottom: 8 },
-  codeContainer: { flex: 2, backgroundColor: theme.card, borderRadius: 16, overflow: "hidden", marginBottom: 12, elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: isDark ? 0.3 : 0.1, shadowRadius: 8 },
-  stateContainer: { flex: 1.5, backgroundColor: theme.card, borderRadius: 16, overflow: "visible", elevation: 5, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: isDark ? 0.3 : 0.1, shadowRadius: 8 },
+    loadingContainer: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      backgroundColor: theme.background,
+    },
+    loadingText: {
+      color: theme.textMuted,
+      marginTop: 16,
+      fontSize: 16,
+      fontWeight: "500",
+    },
 
-  sectionHeader: {
-    color: theme.textMuted,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    fontWeight: "800",
-    fontSize: 12,
-    letterSpacing: 0.8,
-    textTransform: "uppercase",
-  },
-  codeScroll: { flex: 1 },
-  codeLine: { 
-    flexDirection: "row", 
-    paddingHorizontal: 12, 
-    paddingVertical: 2,
-    marginHorizontal: 8,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: 'transparent', // Maintain layout stability
-  },
-  
-  // Execution progress bar
-  progressBarTrack: {
-    height: 2,
-    backgroundColor: isDark ? '#1E293B' : '#E2E8F0',
-    marginHorizontal: 12,
-    marginBottom: 4,
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: 2,
-    backgroundColor: theme.accentLight,
-    borderRadius: 2,
-  },
-  
-  activeLine: { backgroundColor: isDark ? "#064E3B" : "#D1FAE5", borderColor: theme.accentLight },
-  prevLine: { backgroundColor: isDark ? "#1E3A8A" : "#DBEAFE", borderColor: theme.accent },
-  errorLine: { backgroundColor: isDark ? "#7F1D1D" : "#FEE2E2", borderColor: "#EF4444" },
-  
-  lineNumberContainer: {
-    width: 40,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    flexDirection: 'row',
-    marginRight: 12,
-    position: 'relative',
-  },
-  breakpointDot: {
-    position: 'absolute',
-    left: 2,
-    width: 8,
-    height: 8,
-    borderRadius: 8,
-    backgroundColor: '#EF4444',
-  },
-  lineNumber: {
-    color: theme.textMuted,
-    width: 28,
-    textAlign: "right",
-    fontFamily: "monospace",
-  },
-  lineNumberBreakpoint: {
-    color: '#EF4444',
-    fontWeight: 'bold',
-  },
-  codeText: { color: theme.text, fontFamily: "monospace", fontSize: fontSize },
-  
-  stateScroll: { flex: 1, paddingHorizontal: 4 },
-  emptyState: { color: theme.textMuted, fontStyle: "italic", marginLeft: 12 },
-  
-  varRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.cardBorder,
-    marginHorizontal: 12,
-    borderRadius: 12,
-    paddingLeft: 12,
-  },
-  varRowHighlighted: {
-    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.12)' : 'rgba(14, 165, 233, 0.08)',
-    borderLeftWidth: 4,
-    borderLeftColor: theme.accentLight,
-    paddingLeft: 8,
-  },
-  varName: { color: theme.accentLight, fontWeight: "bold", fontFamily: "monospace", fontSize: fontSize },
-  varNameContainer: { flex: 1, paddingRight: 8, justifyContent: "center" },
-  varValueContainer: { flex: 3 },
-  varValue: { color: isDark ? "#34D399" : "#059669", fontFamily: "monospace", fontSize: fontSize },
-  
-  arrayContainer: { flexDirection: "row", paddingVertical: 4, flexWrap: "wrap" },
-  arrayItem: {
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    backgroundColor: isDark ? "#1E293B" : "#F8FAFC",
-    borderRadius: 8,
-    marginRight: 6,
-    marginBottom: 6,
-    alignItems: "center",
-    minWidth: 44,
-    overflow: "hidden",
-  },
-  arrayItemValue: {
-    color: theme.text,
-    fontFamily: "monospace",
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: fontSize,
-  },
-  arrayItemIndex: {
-    color: theme.textMuted,
-    fontSize: 10,
-    backgroundColor: isDark ? "#0F172A" : "#F1F5F9",
-    width: "100%",
-    textAlign: "center",
-    paddingVertical: 3,
-    borderTopWidth: 1,
-    borderTopColor: theme.cardBorder,
-  },
-  
-  dictContainer: {
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    borderRadius: 12,
-    padding: 10,
-    backgroundColor: isDark ? "#1E293B" : "#F8FAFC",
-    marginTop: 6,
-  },
-  dictRow: { flexDirection: "row", paddingVertical: 4 },
-  dictKey: { color: theme.accentLight, fontFamily: "monospace" },
-  dictSeparator: { color: theme.textMuted, fontFamily: "monospace", marginHorizontal: 6 },
-  dictValue: { color: isDark ? "#F472B6" : "#DB2777", fontFamily: "monospace" },
-  
-  collapsibleContainer: { marginBottom: 6 },
-  dictMainContainer: { marginBottom: 6 },
-  
-  sectionHeaderRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingRight: 8,
-  },
-  iconBtn: { paddingHorizontal: 16, paddingVertical: 12 },
-  iconBtnText: { color: theme.accentLight, fontSize: 13, fontWeight: "700", letterSpacing: 0.5 },
-  
-  miniCodeContainer: {
-    backgroundColor: theme.card,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    marginBottom: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: isDark ? 0.2 : 0.05,
-    shadowRadius: 4,
-  },
-  miniCodeStrip: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 6,
-  },
-  // Default split pill
-  miniCodePill: {
-    flex: 1,
-    minWidth: 0,
-  },
-  // Fully expanded pill (full row)
-  miniCodePillExpanded: {
-    flex: 1,
-    minWidth: 0,
-  },
-  miniCodePillHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  miniCodePillLabel: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: theme.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  miniCodeExpandHint: { fontSize: 11, color: theme.textMuted },
-  miniCodeCollapseHint: { fontSize: 9, color: theme.textMuted, fontWeight: '600', letterSpacing: 0.3 },
-  miniCodePillLine: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    borderRadius: 6,
-    paddingVertical: 5,
-    paddingHorizontal: 6,
-  },
-  miniCodePillText: {
-    color: theme.text,
-    fontFamily: 'monospace',
-    fontSize: 12,
-    flexShrink: 1,
-    flexWrap: 'wrap',
-  },
-  // Slim collapsed tab shown when the sibling is expanded
-  miniCodeTab: {
-    width: 36,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: theme.accent,
-    backgroundColor: theme.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 4,
-    gap: 2,
-  },
-  miniCodeTabLabel: {
-    fontSize: 12,
-    color: theme.textDim,
-  },
-  miniCodeTabLineNum: {
-    fontSize: 9,
-    color: theme.textMuted,
-    fontFamily: 'monospace',
-    fontWeight: '700',
-  },
-  miniCodeDivider: {
-    width: 1,
-    backgroundColor: theme.cardBorder,
-    borderRadius: 1,
-    alignSelf: 'stretch',
-    marginVertical: 4,
-  },
-  
-  errorText: { color: "#EF4444", marginTop: 12, fontWeight: "bold", marginHorizontal: 12 },
-  
-  scopeHeaderText: {
-    color: theme.textMuted,
-    fontSize: 13,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-    marginBottom: 4,
-    marginLeft: 12,
-    marginTop: 8,
-  },
-  scopeContainer: {
-    marginBottom: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    overflow: "hidden",
-  },
-  globalsContainer: {
-    marginTop: 24,
-    borderTopWidth: 1,
-    borderTopColor: theme.cardBorder,
-    paddingTop: 16,
-  },
-  
-  outputContainer: {
-    backgroundColor: theme.card,
-    borderRadius: 12,
-    margin: 12,
-    marginTop: 'auto',
-    marginBottom: 12,
-  },
-  outputScroll: { maxHeight: 180 },
-  outputText: { color: theme.text, fontFamily: "monospace" },
-  diffBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  diffBadgePass: { backgroundColor: '#064E3B' },
-  diffBadgeFail: { backgroundColor: '#7F1D1D' },
-  diffBadgeText: { color: '#F1F5F9', fontSize: 10, fontWeight: '800' },
-  diffContainer: {
-    marginTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: theme.cardBorder,
-    paddingTop: 12,
-  },
-  diffHeader: {
-    color: theme.textMuted,
-    fontSize: 10,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  diffExpectedText: {
-    color: isDark ? "#34D399" : "#059669",
-    fontFamily: 'monospace',
-  },
-  
-  // ── Floating top bar ──
-  floatingTopBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 52, // safe area offset
-    paddingBottom: 10,
-    backgroundColor: theme.background,
-  },
-  floatingTopBarCompact: {
-    paddingTop: 52,
-    paddingBottom: 6,
-  },
-  headerShareBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 100,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-  },
-  headerIconBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 100,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-  },
-  headerIconText: {
-    color: theme.text,
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  backBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 100,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backBtnText: {
-    color: theme.text,
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  topBarTitle: {
-    color: theme.textDim,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  topBarRight: {
-    marginLeft: 'auto',
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  stepBadge: {
-    color: theme.accentLight,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  stepBadgeDim: {
-    color: theme.textMuted,
-    fontWeight: '600',
-  },
+    mainLayout: {
+      flex: 1,
+      flexDirection: "column",
+      paddingHorizontal: 12,
+      paddingBottom: 8,
+    },
+    codeContainer: {
+      flex: 2,
+      backgroundColor: theme.card,
+      borderRadius: 16,
+      overflow: "hidden",
+      marginBottom: 12,
+      elevation: 5,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.3 : 0.1,
+      shadowRadius: 8,
+    },
+    stateContainer: {
+      flex: 1.5,
+      backgroundColor: theme.card,
+      borderRadius: 16,
+      overflow: "visible",
+      elevation: 5,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: isDark ? 0.3 : 0.1,
+      shadowRadius: 8,
+    },
 
+    sectionHeader: {
+      color: theme.textMuted,
+      paddingVertical: 12,
+      paddingHorizontal: 16,
+      fontWeight: "800",
+      fontSize: 12,
+      letterSpacing: 0.8,
+      textTransform: "uppercase",
+    },
+    codeScroll: { flex: 1 },
+    codeLine: {
+      flexDirection: "row",
+      paddingHorizontal: 12,
+      paddingVertical: 2,
+      marginHorizontal: 8,
+      borderRadius: 6,
+      borderWidth: 1,
+      borderColor: "transparent", // Maintain layout stability
+    },
 
-  controlsBar: {
-    flexDirection: 'column',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  controlsBarNormal: {
-    backgroundColor: theme.background,
-    paddingHorizontal: 24,
-    paddingBottom: 28,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: theme.cardBorder,
-  },
-  controlsBarFloating: {
-    position: 'absolute',
-    bottom: 24,
-    left: 40,
-    right: 40,
-    backgroundColor: isDark ? 'rgba(15, 23, 42, 0.9)' : 'rgba(255, 255, 255, 0.9)',
-    borderRadius: 100,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    elevation: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: isDark ? 0.5 : 0.1,
-    shadowRadius: 15,
-  },
-  controlsBarCompact: {
-    bottom: 16,
-    gap: 16,
-  },
-  controlIconBtn: {
-    width: 52,
-    height: 52,
-    borderRadius: 100,
-    backgroundColor: theme.card,
-    borderWidth: 1,
-    borderColor: theme.cardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-  },
-  controlIconBtnPlay: {
-    width: 64,
-    height: 64,
-    borderRadius: 100,
-    backgroundColor: theme.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 8,
-    shadowColor: theme.accent,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-  },
-  controlBtnActive: { backgroundColor: theme.accentLight },
-  controlBtnDisabled: { opacity: 0.3 },
-  controlIconText: { color: theme.text, fontSize: 24, fontWeight: "600" },
-  controlIconTextPlay: { color: "#FFFFFF", fontSize: 22, fontWeight: "800" },
-  disabledText: { color: theme.textMuted },
-  speedBtnGroup: { flexDirection: 'row', gap: 6, backgroundColor: theme.card, padding: 4, borderRadius: 12, borderWidth: 1, borderColor: theme.cardBorder },
-  speedBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
-  speedBtnActive: { backgroundColor: theme.accent },
-  speedBtnText: { color: theme.textMuted, fontSize: 11, fontWeight: '700' },
-  speedBtnTextActive: { color: '#FFFFFF' },
-  navBtnGroup: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  errorText: { color: '#F87171', padding: 16, textAlign: 'center', fontFamily: 'monospace', fontWeight: '700' },
-  changeLogContainer: { marginTop: 12, padding: 12, backgroundColor: isDark ? "rgba(56, 189, 248, 0.05)" : "rgba(14, 165, 233, 0.02)", borderRadius: 12, borderLeftWidth: 3, borderLeftColor: theme.accentLight },
-  changeLogTitle: { color: theme.accentLight, fontSize: 10, fontWeight: "800", marginBottom: 8, letterSpacing: 0.5 },
-  changeLogRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4 },
-  changeLogName: { color: theme.text, fontFamily: 'monospace', fontSize: 12, fontWeight: '700', marginRight: 6, minWidth: 60 },
-  changeLogFrom: { color: '#F87171', fontFamily: 'monospace', fontSize: 12 },
-  changeLogArrow: { color: theme.textMuted, fontSize: 12, fontWeight: '700' },
-  changeLogTo: { color: isDark ? '#34D399' : '#059669', fontFamily: 'monospace', fontSize: 12, fontWeight: '700' },
-  
-  modalOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  // Share Menu Styles
-  shareSheet: {
-    backgroundColor: theme.card,
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
-    padding: 24,
-    paddingBottom: 60,
-    borderTopWidth: 1,
-    borderColor: theme.accent,
-  },
-  shareHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 },
-  shareTitle: { color: theme.text, fontSize: 20, fontWeight: '800', letterSpacing: 0.5 },
-  shareOptions: { gap: 16 },
-  shareOption: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.inputBg, padding: 16, borderRadius: 20, borderWidth: 1, borderColor: theme.cardBorder },
-  shareIconBox: { width: 48, height: 48, borderRadius: 14, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
-  shareTextContent: { flex: 1 },
-  shareOptionTitle: { color: theme.text, fontSize: 16, fontWeight: '700' },
-  shareOptionDesc: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  sharingOverlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'center', alignItems: 'center', zIndex: 9999 },
-  sharingText: { color: theme.accentLight, marginTop: 16, fontSize: 14, fontWeight: '700', letterSpacing: 0.5 },
+    // Execution progress bar
+    progressBarTrack: {
+      height: 2,
+      backgroundColor: isDark ? "#1E293B" : "#E2E8F0",
+      marginHorizontal: 12,
+      marginBottom: 4,
+      borderRadius: 2,
+      overflow: "hidden",
+    },
+    progressBarFill: {
+      height: 2,
+      backgroundColor: theme.accentLight,
+      borderRadius: 2,
+    },
+
+    activeLine: {
+      backgroundColor: isDark ? "#064E3B" : "#D1FAE5",
+      borderColor: theme.accentLight,
+    },
+    prevLine: {
+      backgroundColor: isDark ? "#1E3A8A" : "#DBEAFE",
+      borderColor: theme.accent,
+    },
+    errorLine: {
+      backgroundColor: isDark ? "#7F1D1D" : "#FEE2E2",
+      borderColor: "#EF4444",
+    },
+
+    lineNumberContainer: {
+      width: 40,
+      alignItems: "center",
+      justifyContent: "flex-end",
+      flexDirection: "row",
+      marginRight: 12,
+      position: "relative",
+    },
+    breakpointDot: {
+      position: "absolute",
+      left: 2,
+      width: 8,
+      height: 8,
+      borderRadius: 8,
+      backgroundColor: "#EF4444",
+    },
+    lineNumber: {
+      color: theme.textMuted,
+      width: 28,
+      textAlign: "right",
+      fontFamily: "monospace",
+    },
+    lineNumberBreakpoint: {
+      color: "#EF4444",
+      fontWeight: "bold",
+    },
+    codeText: {
+      color: theme.text,
+      fontFamily: "monospace",
+      fontSize: fontSize,
+    },
+
+    stateScroll: { flex: 1, paddingHorizontal: 4 },
+    emptyState: { color: theme.textMuted, fontStyle: "italic", marginLeft: 12 },
+
+    varRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: theme.cardBorder,
+      marginHorizontal: 12,
+      borderRadius: 12,
+      paddingLeft: 12,
+    },
+    varRowHighlighted: {
+      backgroundColor: isDark
+        ? "rgba(56, 189, 248, 0.12)"
+        : "rgba(14, 165, 233, 0.08)",
+      borderLeftWidth: 4,
+      borderLeftColor: theme.accentLight,
+      paddingLeft: 8,
+    },
+    varName: {
+      color: theme.accentLight,
+      fontWeight: "bold",
+      fontFamily: "monospace",
+      fontSize: fontSize,
+    },
+    varNameContainer: { flex: 1, paddingRight: 8, justifyContent: "center" },
+    varValueContainer: { flex: 3 },
+    varValue: {
+      color: isDark ? "#34D399" : "#059669",
+      fontFamily: "monospace",
+      fontSize: fontSize,
+    },
+
+    arrayContainer: {
+      flexDirection: "row",
+      paddingVertical: 4,
+      flexWrap: "wrap",
+    },
+    arrayItem: {
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      backgroundColor: isDark ? "#1E293B" : "#F8FAFC",
+      borderRadius: 8,
+      marginRight: 6,
+      marginBottom: 6,
+      alignItems: "center",
+      minWidth: 44,
+      overflow: "hidden",
+    },
+    arrayItemValue: {
+      color: theme.text,
+      fontFamily: "monospace",
+      paddingHorizontal: 10,
+      paddingVertical: 8,
+      fontSize: fontSize,
+    },
+    arrayItemIndex: {
+      color: theme.textMuted,
+      fontSize: 10,
+      backgroundColor: isDark ? "#0F172A" : "#F1F5F9",
+      width: "100%",
+      textAlign: "center",
+      paddingVertical: 3,
+      borderTopWidth: 1,
+      borderTopColor: theme.cardBorder,
+    },
+
+    dictContainer: {
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      borderRadius: 12,
+      padding: 10,
+      backgroundColor: isDark ? "#1E293B" : "#F8FAFC",
+      marginTop: 6,
+    },
+    dictRow: { flexDirection: "row", paddingVertical: 4 },
+    dictKey: { color: theme.accentLight, fontFamily: "monospace" },
+    dictSeparator: {
+      color: theme.textMuted,
+      fontFamily: "monospace",
+      marginHorizontal: 6,
+    },
+    dictValue: {
+      color: isDark ? "#F472B6" : "#DB2777",
+      fontFamily: "monospace",
+    },
+
+    collapsibleContainer: { marginBottom: 6 },
+    dictMainContainer: { marginBottom: 6 },
+
+    sectionHeaderRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingRight: 8,
+    },
+    iconBtn: { paddingHorizontal: 16, paddingVertical: 12 },
+    iconBtnText: {
+      color: theme.accentLight,
+      fontSize: 13,
+      fontWeight: "700",
+      letterSpacing: 0.5,
+    },
+
+    miniCodeContainer: {
+      backgroundColor: theme.card,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      marginBottom: 10,
+      paddingVertical: 8,
+      paddingHorizontal: 10,
+      elevation: 3,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: isDark ? 0.2 : 0.05,
+      shadowRadius: 4,
+    },
+    miniCodeStrip: {
+      flexDirection: "row",
+      alignItems: "stretch",
+      gap: 6,
+    },
+    // Default split pill
+    miniCodePill: {
+      flex: 1,
+      minWidth: 0,
+    },
+    // Fully expanded pill (full row)
+    miniCodePillExpanded: {
+      flex: 1,
+      minWidth: 0,
+    },
+    miniCodePillHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 4,
+    },
+    miniCodePillLabel: {
+      fontSize: 9,
+      fontWeight: "800",
+      color: theme.textMuted,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+    },
+    miniCodeExpandHint: { fontSize: 11, color: theme.textMuted },
+    miniCodeCollapseHint: {
+      fontSize: 9,
+      color: theme.textMuted,
+      fontWeight: "600",
+      letterSpacing: 0.3,
+    },
+    miniCodePillLine: {
+      flexDirection: "row",
+      alignItems: "flex-start",
+      borderRadius: 6,
+      paddingVertical: 5,
+      paddingHorizontal: 6,
+    },
+    miniCodePillText: {
+      color: theme.text,
+      fontFamily: "monospace",
+      fontSize: 12,
+      flexShrink: 1,
+      flexWrap: "wrap",
+    },
+    // Slim collapsed tab shown when the sibling is expanded
+    miniCodeTab: {
+      width: 36,
+      borderRadius: 8,
+      borderWidth: 1,
+      borderColor: theme.accent,
+      backgroundColor: theme.card,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingVertical: 4,
+      gap: 2,
+    },
+    miniCodeTabLabel: {
+      fontSize: 12,
+      color: theme.textDim,
+    },
+    miniCodeTabLineNum: {
+      fontSize: 9,
+      color: theme.textMuted,
+      fontFamily: "monospace",
+      fontWeight: "700",
+    },
+    miniCodeDivider: {
+      width: 1,
+      backgroundColor: theme.cardBorder,
+      borderRadius: 1,
+      alignSelf: "stretch",
+      marginVertical: 4,
+    },
+
+    errorText: {
+      color: "#EF4444",
+      marginTop: 12,
+      fontWeight: "bold",
+      marginHorizontal: 12,
+    },
+
+    scopeHeaderText: {
+      color: theme.textMuted,
+      fontSize: 13,
+      fontWeight: "800",
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginBottom: 4,
+      marginLeft: 12,
+      marginTop: 8,
+    },
+    scopeContainer: {
+      marginBottom: 16,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      overflow: "hidden",
+    },
+    globalsContainer: {
+      marginTop: 24,
+      borderTopWidth: 1,
+      borderTopColor: theme.cardBorder,
+      paddingTop: 16,
+    },
+
+    outputContainer: {
+      backgroundColor: theme.card,
+      borderRadius: 12,
+      margin: 12,
+      marginTop: "auto",
+      marginBottom: 12,
+    },
+    outputScroll: { maxHeight: 180 },
+    outputText: { color: theme.text, fontFamily: "monospace" },
+    diffBadge: {
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    diffBadgePass: { backgroundColor: "#064E3B" },
+    diffBadgeFail: { backgroundColor: "#7F1D1D" },
+    diffBadgeText: { color: "#F1F5F9", fontSize: 10, fontWeight: "800" },
+    diffContainer: {
+      marginTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: theme.cardBorder,
+      paddingTop: 12,
+    },
+    diffHeader: {
+      color: theme.textMuted,
+      fontSize: 10,
+      fontWeight: "700",
+      textTransform: "uppercase",
+      marginBottom: 4,
+    },
+    diffExpectedText: {
+      color: isDark ? "#34D399" : "#059669",
+      fontFamily: "monospace",
+    },
+
+    // ── Floating top bar ──
+    floatingTopBar: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingTop: 52, // safe area offset
+      paddingBottom: 10,
+      backgroundColor: theme.background,
+    },
+    floatingTopBarCompact: {
+      paddingTop: 52,
+      paddingBottom: 6,
+    },
+    headerShareBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 100,
+      backgroundColor: theme.card,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      alignItems: "center",
+      justifyContent: "center",
+      marginLeft: 8,
+    },
+    headerIconBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 100,
+      backgroundColor: theme.card,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      alignItems: "center",
+      justifyContent: "center",
+      marginLeft: 8,
+    },
+    headerIconText: {
+      color: theme.text,
+      fontWeight: "700",
+      fontSize: 14,
+    },
+    backBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 100,
+      backgroundColor: theme.card,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    backBtnText: {
+      color: theme.text,
+      fontSize: 18,
+      fontWeight: "700",
+    },
+    topBarTitle: {
+      color: theme.textDim,
+      fontSize: 14,
+      fontWeight: "700",
+      letterSpacing: 0.5,
+    },
+    topBarRight: {
+      marginLeft: "auto",
+      flexDirection: "row",
+      alignItems: "center",
+    },
+    stepBadge: {
+      color: theme.accentLight,
+      fontSize: 14,
+      fontWeight: "800",
+    },
+    stepBadgeDim: {
+      color: theme.textMuted,
+      fontWeight: "600",
+    },
+
+    controlsBar: {
+      flexDirection: "column",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 8,
+    },
+    controlsBarNormal: {
+      backgroundColor: theme.background,
+      paddingHorizontal: 24,
+      paddingBottom: 28,
+      paddingTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: theme.cardBorder,
+    },
+    controlsBarFloating: {
+      position: "absolute",
+      bottom: 24,
+      left: 40,
+      right: 40,
+      backgroundColor: isDark
+        ? "rgba(15, 23, 42, 0.9)"
+        : "rgba(255, 255, 255, 0.9)",
+      borderRadius: 100,
+      paddingVertical: 12,
+      paddingHorizontal: 20,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      elevation: 10,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: isDark ? 0.5 : 0.1,
+      shadowRadius: 15,
+    },
+    controlsBarCompact: {
+      bottom: 16,
+      gap: 16,
+    },
+    controlIconBtn: {
+      width: 52,
+      height: 52,
+      borderRadius: 100,
+      backgroundColor: theme.card,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+      alignItems: "center",
+      justifyContent: "center",
+      elevation: 4,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.2,
+      shadowRadius: 4,
+    },
+    controlIconBtnPlay: {
+      width: 64,
+      height: 64,
+      borderRadius: 100,
+      backgroundColor: theme.accent,
+      alignItems: "center",
+      justifyContent: "center",
+      elevation: 8,
+      shadowColor: theme.accent,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.4,
+      shadowRadius: 8,
+    },
+    controlBtnActive: { backgroundColor: theme.accentLight },
+    controlBtnDisabled: { opacity: 0.3 },
+    controlIconText: { color: theme.text, fontSize: 24, fontWeight: "600" },
+    controlIconTextPlay: { color: "#FFFFFF", fontSize: 22, fontWeight: "800" },
+    disabledText: { color: theme.textMuted },
+    speedBtnGroup: {
+      flexDirection: "row",
+      gap: 6,
+      backgroundColor: theme.card,
+      padding: 4,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+    },
+    speedBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+    speedBtnActive: { backgroundColor: theme.accent },
+    speedBtnText: { color: theme.textMuted, fontSize: 11, fontWeight: "700" },
+    speedBtnTextActive: { color: "#FFFFFF" },
+    navBtnGroup: { flexDirection: "row", alignItems: "center", gap: 16 },
+    errorText: {
+      color: "#F87171",
+      padding: 16,
+      textAlign: "center",
+      fontFamily: "monospace",
+      fontWeight: "700",
+    },
+    changeLogContainer: {
+      marginTop: 12,
+      padding: 12,
+      backgroundColor: isDark
+        ? "rgba(56, 189, 248, 0.05)"
+        : "rgba(14, 165, 233, 0.02)",
+      borderRadius: 12,
+      borderLeftWidth: 3,
+      borderLeftColor: theme.accentLight,
+    },
+    changeLogTitle: {
+      color: theme.accentLight,
+      fontSize: 10,
+      fontWeight: "800",
+      marginBottom: 8,
+      letterSpacing: 0.5,
+    },
+    changeLogRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      marginBottom: 4,
+    },
+    changeLogName: {
+      color: theme.text,
+      fontFamily: "monospace",
+      fontSize: 12,
+      fontWeight: "700",
+      marginRight: 6,
+      minWidth: 60,
+    },
+    changeLogFrom: { color: "#F87171", fontFamily: "monospace", fontSize: 12 },
+    changeLogArrow: { color: theme.textMuted, fontSize: 12, fontWeight: "700" },
+    changeLogTo: {
+      color: isDark ? "#34D399" : "#059669",
+      fontFamily: "monospace",
+      fontSize: 12,
+      fontWeight: "700",
+    },
+
+    modalOverlay: {
+      flex: 1,
+      justifyContent: "flex-end",
+      backgroundColor: "rgba(0,0,0,0.5)",
+    },
+    // Share Menu Styles
+    shareSheet: {
+      backgroundColor: theme.card,
+      borderTopLeftRadius: 32,
+      borderTopRightRadius: 32,
+      padding: 24,
+      paddingBottom: 60,
+      borderTopWidth: 1,
+      borderColor: theme.accent,
+    },
+    shareHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 24,
+    },
+    shareTitle: {
+      color: theme.text,
+      fontSize: 20,
+      fontWeight: "800",
+      letterSpacing: 0.5,
+    },
+    shareOptions: { gap: 16 },
+    shareOption: {
+      flexDirection: "row",
+      alignItems: "center",
+      backgroundColor: theme.inputBg,
+      padding: 16,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: theme.cardBorder,
+    },
+    shareIconBox: {
+      width: 48,
+      height: 48,
+      borderRadius: 14,
+      justifyContent: "center",
+      alignItems: "center",
+      marginRight: 16,
+    },
+    shareTextContent: { flex: 1 },
+    shareOptionTitle: { color: theme.text, fontSize: 16, fontWeight: "700" },
+    shareOptionDesc: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+    sharingOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      justifyContent: "center",
+      alignItems: "center",
+      zIndex: 9999,
+    },
+    sharingText: {
+      color: theme.accentLight,
+      marginTop: 16,
+      fontSize: 14,
+      fontWeight: "700",
+      letterSpacing: 0.5,
+    },
   });
 }

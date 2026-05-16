@@ -6,47 +6,149 @@ import os
 trace_events = []
 MAX_STEPS = 1000
 
-def parse_val(v, depth=0):
-    if depth > 5:
-        return {"_type": "raw", "data": "..."}
-    try:
-        t = v.type.strip_typedefs()
-        
-        # Handle primitives
-        if t.code in (gdb.TYPE_CODE_INT, gdb.TYPE_CODE_FLT, gdb.TYPE_CODE_BOOL):
-            return {"_type": "primitive", "data": str(v)}
-        
-        # Handle strings
-        if str(t).startswith("std::__cxx11::basic_string"):
-            return {"_type": "primitive", "data": str(v).split('"')[1] if '"' in str(v) else str(v)}
+class TracerState:
+    def __init__(self):
+        self.heap = {}
+        self.visited_addrs = set()
+        self.MAX_HEAP_NODES = 50
 
-        # Arrays and vectors
-        if t.code == gdb.TYPE_CODE_ARRAY or str(t).startswith("std::vector"):
-            items = []
-            try:
-                # GDB pretty printing often exposes elements via python iterator
-                for i, child in enumerate(gdb.default_visualizer(v).children()):
-                    if i > 20:
-                        items.append({"_type": "raw", "data": "..."})
-                        break
-                    items.append(parse_val(child[1], depth+1))
-                return {"_type": "array", "data": items}
-            except:
-                pass
+    def parse_val(self, v, depth=0):
+        if depth > 10:
+            return {"_type": "raw", "data": "..."}
+        try:
+            t = v.type.strip_typedefs()
             
-            if t.code == gdb.TYPE_CODE_ARRAY:
+            # Primitives
+            if t.code in (gdb.TYPE_CODE_INT, gdb.TYPE_CODE_FLT, gdb.TYPE_CODE_BOOL):
+                return {"_type": "primitive", "data": str(v)}
+            
+            # Strings
+            if str(t).startswith("std::__cxx11::basic_string"):
+                return {"_type": "primitive", "data": str(v).split('"')[1] if '"' in str(v) else str(v)}
+
+            # Pointers
+            if t.code == gdb.TYPE_CODE_PTR:
                 try:
-                    target_type = t.target()
-                    lower, upper = t.range()
-                    for i in range(lower, min(upper+1, lower+20)):
-                        items.append(parse_val(v[i], depth+1))
-                    return {"_type": "array", "data": items}
+                    addr = int(v)
+                    if addr == 0:
+                        return {"_type": "pointer", "data": "0x0"}
+                    hex_addr = hex(addr)
+                    
+                    # Only parse the target if we haven't seen this address yet
+                    if hex_addr not in self.visited_addrs:
+                        self.visited_addrs.add(hex_addr)  # Mark BEFORE recursing to prevent infinite loops
+                        try:
+                            target = v.dereference()
+                            tt = target.type.strip_typedefs()
+                            if tt.code == gdb.TYPE_CODE_STRUCT:
+                                fields_data = {}
+                                for f in tt.fields():
+                                    if not f.is_base_class:
+                                        try:
+                                            fields_data[f.name] = self.parse_val(target[f], depth+1)
+                                        except Exception:
+                                            pass
+                                type_name = str(tt)
+                                if " " in type_name:
+                                    type_name = type_name.split()[0]
+                                # Handle nested class names like "Solution::Node"
+                                if "::" in type_name:
+                                    type_name = type_name.split("::")[-1]
+                                self.heap[hex_addr] = {
+                                    "_type": "struct",
+                                    "name": type_name,
+                                    "fields": fields_data
+                                }
+                        except Exception:
+                            pass  # Could not dereference, but we still have the address
+                    
+                    # Always return a proper pointer type with the address
+                    return {"_type": "pointer", "data": hex_addr}
+                except Exception:
+                    return {"_type": "raw", "data": str(v)}
+
+            # Struct / Class
+            if t.code == gdb.TYPE_CODE_STRUCT:
+                try:
+                    addr = int(v.address) if v.address else None
+                    if not addr:
+                        # Inline struct (by value, no heap address)
+                        fields_data = {}
+                        for f in t.fields():
+                            if not f.is_base_class:
+                                try:
+                                    fields_data[f.name] = self.parse_val(v[f], depth+1)
+                                except Exception:
+                                    pass
+                        return {"_type": "struct_inline", "fields": fields_data}
+
+                    hex_addr = hex(addr)
+                    if hex_addr not in self.visited_addrs:
+                        self.visited_addrs.add(hex_addr)
+                        fields_data = {}
+                        for f in t.fields():
+                            if not f.is_base_class:
+                                try:
+                                    fields_data[f.name] = self.parse_val(v[f], depth+1)
+                                except Exception:
+                                    pass
+                        type_name = str(t)
+                        if " " in type_name:
+                            type_name = type_name.split()[0]
+                        if "::" in type_name:
+                            type_name = type_name.split("::")[-1]
+                        self.heap[hex_addr] = {
+                            "_type": "struct",
+                            "name": type_name,
+                            "fields": fields_data
+                        }
+                    return {"_type": "pointer", "data": hex_addr}
+                except Exception:
+                    pass
+
+            # Arrays and vectors
+            if t.code == gdb.TYPE_CODE_ARRAY or str(t).startswith("std::vector"):
+                try:
+                    addr = int(v.address) if v.address else None
+                    if not addr:
+                        return {"_type": "raw", "data": "[Array without address]"}
+                        
+                    hex_addr = hex(addr)
+                    if hex_addr not in self.visited_addrs:
+                        if len(self.visited_addrs) >= self.MAX_HEAP_NODES:
+                            return {"_type": "pointer", "data": hex_addr}
+                        self.visited_addrs.add(hex_addr)
+                        
+                        items = []
+                        if t.code == gdb.TYPE_CODE_ARRAY:
+                            try:
+                                target_type = t.target()
+                                lower, upper = t.range()
+                                for i in range(lower, min(upper+1, lower+20)):
+                                    items.append(self.parse_val(v[i], depth+1))
+                            except:
+                                pass
+                        else:
+                            try:
+                                for i, child in enumerate(gdb.default_visualizer(v).children()):
+                                    if i > 20:
+                                        items.append({"_type": "raw", "data": "..."})
+                                        break
+                                    items.append(self.parse_val(child[1], depth+1))
+                            except:
+                                pass
+                                
+                        self.heap[hex_addr] = {
+                            "_type": "array",
+                            "data": items
+                        }
+                    return {"_type": "pointer", "data": hex_addr}
                 except:
                     pass
 
-        return {"_type": "raw", "data": str(v)}
-    except Exception as e:
-        return {"_type": "raw", "data": f"[Err: {e}]"}
+            return {"_type": "raw", "data": str(v)}
+        except Exception as e:
+            return {"_type": "raw", "data": f"[Err: {e}]"}
 
 def main():
     gdb.execute("set confirm off")
@@ -103,6 +205,8 @@ def main():
             block = frame.block()
             locs = {}
             globs = {}
+            tracer_state = TracerState()
+            
             while block:
                 is_global_or_static = block.is_global or block.is_static
                 for symbol in block:
@@ -112,14 +216,14 @@ def main():
                         if not symbol.symtab or "main.cpp" not in symbol.symtab.filename: continue
                         try:
                             val = symbol.value(frame)
-                            globs[symbol.name] = parse_val(val)
+                            globs[symbol.name] = tracer_state.parse_val(val)
                         except:
                             pass
                     else:
                         if symbol.is_argument or symbol.is_variable:
                             try:
                                 val = symbol.value(frame)
-                                locs[symbol.name] = parse_val(val)
+                                locs[symbol.name] = tracer_state.parse_val(val)
                             except:
                                 pass
                 block = block.superblock
@@ -129,6 +233,7 @@ def main():
                 "func": func_name,
                 "vars": locs,
                 "globs": globs,
+                "heap": tracer_state.heap,
                 "output": "" # We don't trace stdout sequentially in GDB as easily, we can capture it at end
             })
             
